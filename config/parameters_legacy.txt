@@ -1,0 +1,74 @@
+#Demography
+
+YearsToSimulate:30
+InitPopulation:1000000
+UnrealLifeLength:110
+
+TrainDataFilename: data_agg_rus.csv
+TrainStagingDataFilename: data_ind.csv
+ 
+#Natural History Parameters 
+
+#Pattern of hazard dependenency on age -1@{val} - base. {age}@{val}
+DiagnoseHazard: piecewise, -1@-11.9;0@0.01;40@0.28;50@-0.11;60@-0.1;70@-0.1
+
+
+CancerDeathHazard: exp,1
+
+# Reduced Gompertz model params (V(t) = exp(k-exp(c-b*t))), log(b)=b_pop + N(0,b_std)
+# [k,c,b_pop,b_std]
+#Fourth parameter can't be fitted on data only set by user
+ReducedGompertzNonAggressive: 0.1,0.3,0.1,0.1
+ReducedGompertzAggressive: 0.1,0.3,0.1,0.1
+
+#Exponential distribution 
+LeadTimeByStageMeans: 1,3,4,5
+
+
+ReoccurrenceProbability: 0.2
+TreatmentMortalityAdjustment: 1
+#GrowthRateLimits:  1.5, 4
+AggressivenessRateThreshold: 0.2
+
+#Treatment Parameters
+
+# TreatmentEfficiency for stage 1,2,3,4
+TreatmentEfficiency: 0.7, 0.3, 0.2, 0.2
+Complications:0.1
+
+#Ages array 0-40,40-50,50-60,70-80,80+
+AgeCureConstants: 1,0.9,0.5,0.3,0.1
+
+#Factors are multiplied between each other and by conditional probability
+
+FactorsRR: Smoking@1.1,Obesity@1.05,Activity@0.95
+AgeIrrelevantFactorsRR: Gene@1.05
+
+#At early age  Smoking -> 1.1^0.1 = 1.009, at old age 1.1^2 = 1.21
+
+FactorAgeCorrection: 0.1,2
+
+#Screening Parameters
+
+ScreeningDate: 10
+StartAge: 50
+FinishAge: 60
+Freqency: 2
+SelectedTest: 70
+ParticipationRate: 0.5
+
+
+TestParameters: 50,60,70,80
+TestTP: 0.6,0.7,0.9,0.95
+TestFP: 0.05,0.07,0.1,0.15
+
+#Economy
+
+TestPerPersonPrice: 1
+ScreeningPrice: 1
+StageTreatementPrice: 1,2,3,4
+ComplicationsPrice: 1
+ReoccurrenceCost: 1
+
+
+

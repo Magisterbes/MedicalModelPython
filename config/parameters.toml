@@ -1,0 +1,61 @@
+# MedicalModel2024 Python — TOML Configuration
+# Equivalent to C# parameters.txt
+
+[simulation]
+years_to_simulate = 30
+init_population = 100000
+unreal_life_length = 110
+
+[data]
+data_dir = "data"
+train_data_filename = "data_agg_rus.csv"
+train_staging_data_filename = "data_ind.csv"
+
+[staging]
+stage_distribution_length = 4
+
+[hazards]
+diagnose_hazard_spec = "piecewise, -1@-11.9;0@0.01;40@0.28;50@-0.11;60@-0.1;70@-0.1"
+cancer_death_hazard_spec = "exp, 1"
+
+[gompertz]
+reduced_gompertz_non_aggressive = [0.1, 0.3, 0.1, 0.1]
+reduced_gompertz_aggressive = [0.1, 0.3, 0.1, 0.1]
+
+[lead_time]
+lead_time_by_stage_means = [1.0, 3.0, 4.0, 5.0]
+
+[natural_history]
+reoccurrence_probability = 0.2
+treatment_mortality_adjustment = 1.0
+aggressiveness_rate_threshold = 0.2
+growth_rate_limits = [1.5, 4.0]
+
+[treatment]
+treatment_efficiency = [0.7, 0.3, 0.2, 0.2]
+complications = [0.1]
+age_cure_constants = [1.0, 0.9, 0.5, 0.3, 0.1]
+
+[risk_factors]
+# Not currently used in simulation core (defined for future use)
+factors_rr = { Smoking = 1.1, Obesity = 1.05, Activity = 0.95 }
+age_irrelevant_factors_rr = { Gene = 1.05 }
+factor_age_correction = [0.1, 2.0]
+
+[screening]
+screening_date = 10
+start_age = 50
+finish_age = 60
+frequency = 2
+selected_test = 70
+participation_rate = 0.5
+test_parameters = [50, 60, 70, 80]
+test_tp = [0.6, 0.7, 0.9, 0.95]
+test_fp = [0.05, 0.07, 0.1, 0.15]
+
+[economics]
+test_per_person_price = 1.0
+screening_price = 1.0
+stage_treatment_price = [1.0, 2.0, 3.0, 4.0]
+complications_price = 1.0
+reoccurrence_cost = 1.0

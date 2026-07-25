@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MedicalModel2024 — Cancer Screening Microsimulation</title>
+    <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: #f0f2f5; color: #333; }
+        .header { background: linear-gradient(135deg, #1a237e, #283593); color: white;
+                  padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 1.5em; }
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        .controls, .param-panel { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px;
+                     box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .controls { display: flex; gap: 15px; flex-wrap: wrap; align-items: center; }
+        .controls label, .param-panel label { font-weight: 600; font-size: 0.9em; }
+        .controls input, .controls select, .param-panel input { padding: 8px 12px; border: 1px solid #ccc;
+                    border-radius: 4px; font-size: 0.9em; }
+        .btn { padding: 10px 24px; border: none; border-radius: 6px; cursor: pointer;
+               font-weight: 600; font-size: 0.9em; transition: all 0.2s; }
+        .btn-primary { background: #1a237e; color: white; }
+        .btn-primary:hover { background: #283593; }
+        .btn-primary:disabled { background: #9e9e9e; cursor: not-allowed; }
+        .btn-success { background: #2e7d32; color: white; }
+        .btn-warning { background: #e65100; color: white; }
+        .btn-secondary { background: #546e7a; color: white; }
+        .summary { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .summary h2 { margin-bottom: 15px; color: #1a237e; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+                        gap: 15px; }
+        .summary-card { background: #f5f7ff; border-radius: 6px; padding: 15px; text-align: center;
+                         border: 1px solid #e0e0e0; }
+        .summary-card .value { font-size: 1.6em; font-weight: 700; color: #1a237e; }
+        .summary-card .label { font-size: 0.8em; color: #666; margin-top: 4px; }
+        .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .chart-box { background: white; border-radius: 8px; padding: 15px;
+                      box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .chart-box.full { grid-column: 1 / -1; }
+        .chart-box h3 { margin-bottom: 10px; color: #1a237e; font-size: 1.05em; }
+        .progress-bar { width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px;
+                        margin-top: 8px; overflow: hidden; display: none; }
+        .progress-bar .fill { height: 100%; background: #1a237e; border-radius: 4px;
+                              transition: width 0.3s; width: 0%; }
+        .status { font-size: 0.85em; color: #888; margin-left: 15px; }
+        .param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+        .param-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
+        .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px; }
+        .param-row { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
+        .param-row label { font-weight: 400; font-size: 0.82em; color: #555; flex: 1; }
+        .param-row input { width: 100px; font-size: 0.82em; padding: 4px 6px; }
+        .btn-small { padding: 4px 12px; font-size: 0.78em; margin-left: 6px; }
+        .collapsible { cursor: pointer; color: #1a237e; font-weight: 600; }
+        .collapsible::after { content: ' ▾'; }
+        .collapsible.collapsed::after { content: ' ▸'; }
+        .collapsible-content { margin-top: 8px; }
+        .collapsible-content.collapsed { display: none; }
+        @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🩺 MedicalModel2024 — Cancer Screening Microsimulation</h1>
+        <span style="font-size:0.85em;opacity:0.8">v1.0.0 Python</span>
+    </div>
+
+    <div class="container">
+        <div class="controls">
+            <div><label>Population:</label>
+                <input type="number" id="population" value="50000" min="1000" max="1000000" step="10000" style="width:110px">
+            </div>
+            <div><label>Years:</label>
+                <input type="number" id="years" value="30" min="5" max="60" style="width:80px">
+            </div>
+            <div><label>Seed:</label>
+                <input type="number" id="seed" placeholder="auto" style="width:100px">
+            </div>
+            <button class="btn btn-success" id="btn-fit" onclick="runFit()">🔧 Fit + Simulate</button>
+            <button class="btn btn-primary" id="btn-run" onclick="runSimulation()">▶ Run Only</button>
+            <span class="status" id="status-text">Ready</span>
+            <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
+        </div>
+
+        <!-- Collapsible parameter panel -->
+        <div class="param-panel">
+            <span class="collapsible" onclick="toggleParams()" id="params-toggle">⚙ Parameters</span>
+            <div class="collapsible-content collapsed" id="params-content">
+                <div class="param-grid" id="params-grid"></div>
+                <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+                    <button class="btn btn-secondary btn-small" onclick="saveParams()">💾 Save to File</button>
+                    <button class="btn btn-secondary btn-small" onclick="loadParams()">📂 Load from File</button>
+                    <button class="btn btn-primary btn-small" onclick="runWithParams()">▶ Run with These Params</button>
+                    <button class="btn btn-warning btn-small" onclick="runFit()">🔧 Fit (auto-calibrate)</button>
+                    <button class="btn btn-secondary btn-small" onclick="runSensitivity()">📊 Sensitivity Analysis</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="summary" id="summary-section" style="display:none">
+            <h2>📊 Simulation Results</h2>
+            <div class="summary-grid" id="summary-grid"></div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-box"><h3>Incidence (log10 rates)</h3><div id="chart-incidence" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Mortality (log10 rates)</h3><div id="chart-mortality" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Stage Distribution at Diagnosis</h3><div id="chart-stages" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Cause-Specific Survival</h3><div id="chart-survival" style="height:350px"></div></div>
+            <div class="chart-box full"><h3>Years of Life Saved</h3><div id="chart-years-saved" style="height:300px"></div></div>
+        </div>
+    </div>
+
+    <script>
+let pollingInterval = null;
+
+function toggleParams(){ 
+    document.getElementById('params-content').classList.toggle('collapsed');
+    document.getElementById('params-toggle').classList.toggle('collapsed');
+    if (!document.getElementById('params-content').classList.contains('collapsed')) loadParamsFromServer();
+}
+
+function runSimulation(){ 
+    const pop = document.getElementById('population').value;
+    const seed = document.getElementById('seed').value || null;
+    startRun({ population: pop, seed: seed, fit: false });
+}
+function runFit(){ 
+    const pop = document.getElementById('population').value;
+    const seed = document.getElementById('seed').value || null;
+    startRun({ population: pop, seed: seed, fit: true });
+}
+
+function gatherOverrideParams(){
+    const inputs = document.querySelectorAll('#params-grid input');
+    const override = {};
+    inputs.forEach(inp => { if (inp.value !== '') override[inp.name] = inp.value; });
+    // Parse arrays/numbers properly
+    const parsed = {};
+    for (const [k,v] of Object.entries(override)) {
+        if (v.includes(',')) parsed[k] = v.split(',').map(x => parseFloat(x.trim())).filter(x=>!isNaN(x));
+        else if (!isNaN(parseFloat(v))) parsed[k] = parseFloat(v);
+        else parsed[k] = v;
+    }
+    return parsed;
+}
+
+function runWithParams(){
+    const pop = document.getElementById('population').value;
+    const seed = document.getElementById('seed').value || null;
+    const override = gatherOverrideParams();
+    startRun({ population: pop, seed: seed, fit: false, override_params: override });
+}
+
+function startRun(params){
+    document.getElementById('btn-run').disabled = true;
+    document.getElementById('btn-fit').disabled = true;
+    document.getElementById('status-text').textContent = 'Initializing...';
+    document.getElementById('progress-bar').style.display = 'block';
+    document.getElementById('progress-fill').style.width = '0%';
+    fetch('/api/simulate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params) })
+        .then(r=>r.json()).then(data=>{
+            if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; resetButtons(); return; }
+            pollingInterval = setInterval(pollStatus, 500);
+        }).catch(err=>{ document.getElementById('status-text').textContent='Connection error'; resetButtons(); });
+}
+
+function pollStatus(){
+    fetch('/api/status').then(r=>r.json()).then(data=>{
+        document.getElementById('progress-fill').style.width = data.progress + '%';
+        document.getElementById('status-text').textContent = data.running ? `Simulating... ${data.progress}%` : 'Ready';
+        if(!data.running && data.has_results){ clearInterval(pollingInterval); loadResults(); resetButtons(); }
+    });
+}
+
+function loadResults(){
+    fetch('/api/results').then(r=>r.json()).then(data=>{
+        if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; return; }
+        renderSummary(data.summary); renderCharts(data.stats);
+    });
+}
+
+function renderSummary(summary){
+    document.getElementById('summary-section').style.display='block';
+    const g=document.getElementById('summary-grid'); g.innerHTML='';
+    const cards=[
+        {label:'Agents',v:summary.n_agents},{label:'Cancer Cases',v:summary.n_cancer_cases},
+        {label:'Cured (Clinical)',v:summary.n_cured_clinical},{label:'Cured (Screening)',v:summary.n_cured_screening},
+        {label:'Detected by Screening',v:summary.n_screening_detected},{label:'Alive at End',v:summary.n_alive_end},
+        {label:'Years Simulated',v:summary.years_simulated},{label:'Random Seed',v:summary.random_seed},
+    ];
+    cards.forEach(c=>{ g.innerHTML+=`<div class="summary-card"><div class="value">${c.v?.toLocaleString?.()||c.v||'-'}</div><div class="label">${c.label}</div></div>`; });
+}
+
+function renderCharts(stats){
+    const ages=Array.from({length:100},(_,i)=>i);
+    const log10=v=>v>0?Math.log10(v):null;
+    Plotly.newPlot('chart-incidence',[{x:ages,y:(stats.incidence_rates||[]).map(log10),type:'scatter',mode:'lines',line:{color:'#1a237e',width:2}}],{margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
+    Plotly.newPlot('chart-mortality',[
+        {x:ages,y:(stats.mortality_rates||[]).map(log10),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
+        {x:ages,y:(stats.screened_mortality_rates||[]).map(log10),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2,dash:'dash'}}
+    ],{margin:{t:5,r:10,b:40,l:50},legend:{x:0.6,y:0.95}},{responsive:true});
+    Plotly.newPlot('chart-stages',[
+        {x:['I','II','III','IV'],y:stats.diagnose_stages_distribution||[],type:'bar',name:'Clinical',marker:{color:'#1a237e'}},
+        {x:['I','II','III','IV'],y:stats.screening_stages_distribution||[],type:'bar',name:'Screening',marker:{color:'#2e7d32'}}
+    ],{margin:{t:5,r:10,b:40,l:50},barmode:'group'},{responsive:true});
+    Plotly.newPlot('chart-survival',[
+        {x:Array.from({length:20},(_,i)=>i),y:(stats.survival||[]).slice(0,20),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
+        {x:Array.from({length:20},(_,i)=>i),y:(stats.survival_screening||[]).slice(0,20),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2}}
+    ],{yaxis:{range:[0,1]},margin:{t:5,r:10,b:40,l:50}},{responsive:true});
+    Plotly.newPlot('chart-years-saved',[{x:Array.from({length:(stats.years_saved||[]).length},(_,i)=>i),y:stats.years_saved||[],type:'bar',marker:{color:'#2e7d32'}}],{margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
+}
+
+function loadParamsFromServer(){
+    fetch('/api/parameters').then(r=>r.json()).then(data=>{
+        if(data.error){ console.log('No params yet — run simulation first'); return; }
+        const grid = document.getElementById('params-grid');
+        const groups = [
+            {name:'Diagnose Hazard', fields:[
+                {id:'diagnose_hazard_constants', label:'Piecewise betas (6 vals)', val:(data.diagnose_hazard_constants||[]).join(',')},
+            ]},
+            {name:'Cancer Death', fields:[
+                {id:'cancer_death_hazard_lambda', label:'Log-hazard lambda', val:data.cancer_death_hazard_lambda},
+            ]},
+            {name:'Treatment', fields:[
+                {id:'treatment_efficiency', label:'Efficiency (4 stages)', val:(data.treatment_efficiency||[]).join(',')},
+                {id:'age_cure_constants', label:'Age cure multipliers (5)', val:(data.age_cure_constants||[]).join(',')},
+            ]},
+            {name:'Lead Time', fields:[
+                {id:'lead_time_means', label:'Lead time means (4)', val:(data.lead_time_means||[]).join(',')},
+            ]},
+            {name:'Screening', fields:[
+                {id:'participation_rate', label:'Participation rate', val:data.participation_rate},
+                {id:'screening_start_age', label:'Start age', val:data.screening_start_age},
+                {id:'screening_finish_age', label:'Finish age', val:data.screening_finish_age},
+                {id:'screening_frequency', label:'Frequency (years)', val:data.screening_frequency},
+            ]},
+            {name:'Gompertz Aggressive', fields:[
+                {id:'gompertz_aggressive', label:'K,C,B_pop,B_std (4 vals)', val:(data.gompertz_aggressive||[]).join(',')},
+            ]},
+            {name:'Gompertz Non-Aggressive', fields:[
+                {id:'gompertz_non_aggressive', label:'K,C,B_pop,B_std (4 vals)', val:(data.gompertz_non_aggressive||[]).join(',')},
+            ]},
+            {name:'Other', fields:[
+                {id:'growth_rate_limits', label:'Growth rate limits (2)', val:(data.growth_rate_limits||[]).join(',')},
+                {id:'aggressiveness_threshold', label:'Aggressiveness threshold', val:data.aggressiveness_threshold},
+                {id:'reoccurrence_prob', label:'Reoccurrence prob', val:data.reoccurrence_prob},
+            ]},
+        ];
+        grid.innerHTML = groups.map(g => {
+            const fields = g.fields.map(f => 
+                `<div class="param-row"><label>${f.label}</label><input name="${f.id}" value="${f.val??''}" style="width:${f.val?.toString().length>20?200:120}px"></div>`
+            ).join('');
+            return `<div class="param-group"><h4>${g.name}</h4>${fields}</div>`;
+        }).join('');
+    });
+}
+
+function saveParams(){
+    const saveName = prompt('File name:', 'config/params_fitted.json') || 'config/params_fitted.json';
+    fetch('/api/parameters/save', {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({path: saveName})})
+        .then(r=>r.json()).then(d=>{ alert(d.error ? 'Error: '+d.error : 'Saved to '+d.path); });
+}
+
+function loadParams(){
+    const loadName = prompt('File name:', 'config/params_fitted.json') || 'config/params_fitted.json';
+    fetch('/api/parameters/load', {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({path: loadName})})
+        .then(r=>r.json()).then(d=>{ 
+            if(d.error){ alert('Error: '+d.error); return; }
+            alert('Loaded from '+d.path); loadParamsFromServer(); 
+        });
+}
+
+function runSensitivity(){
+    const pop = document.getElementById('population').value;
+    const seed = document.getElementById('seed').value || null;
+    document.getElementById('status-text').textContent = 'Running sensitivity analysis...';
+    document.getElementById('progress-bar').style.display = 'block';
+    document.getElementById('progress-fill').style.width = '20%';
+    document.getElementById('btn-run').disabled = true;
+    document.getElementById('btn-fit').disabled = true;
+    fetch('/api/sensitivity', { method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ population: Math.max(Math.min(pop, 100000), 50000), years: 30, seed: seed,
+            factors: [0.5, 0.75, 1.0, 1.25, 1.5] }) })
+        .then(r=>r.json()).then(data=>{
+            if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; resetButtons(); return; }
+            pollingInterval = setInterval(pollSensitivity, 1000);
+        }).catch(err=>{ document.getElementById('status-text').textContent='Connection error'; resetButtons(); });
+}
+
+function pollSensitivity(){
+    fetch('/api/status').then(r=>r.json()).then(d=>{
+        document.getElementById('progress-fill').style.width = (20 + 70 * (d.progress/100)) + '%';
+        if(!d.running){ clearInterval(pollingInterval); loadSensitivityResults(); resetButtons(); }
+    });
+}
+
+function loadSensitivityResults(){
+    fetch('/api/sensitivity/result').then(r=>r.json()).then(data=>{
+        if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; return; }
+        document.getElementById('status-text').textContent = 'Sensitivity done in '+(data.runtime_sec||0).toFixed(1)+'s';
+        renderSensitivitySummary(data);
+    });
+}
+
+function renderSensitivitySummary(data){
+    const factors = data.factors || [];
+    const baseline = data.baseline_means || [];
+    document.getElementById('summary-section').style.display='block';
+    const g=document.getElementById('summary-grid');
+    g.innerHTML='<div class="summary-card"><div class="value" style="font-size:1em">Lead Time Means: ['+baseline.join(', ')+'] × Factors</div><div class="label">Sensitivity Analysis</div></div>';
+    if(data.metrics) {
+        const m = data.metrics;
+        ['n_cancer_cases','n_cured_clinical','n_cured_screening','n_screening_detected'].forEach(k=>{
+            if(m[k]) g.innerHTML+=`<div class="summary-card"><div class="value" style="font-size:1em">${m[k].join(' → ')}</div><div class="label">${k.replace(/_/g,' ')} (0.5→1→1.5)</div></div>`;
+        });
+    }
+    // Plot sensitivity curves
+    renderSensitivityCharts(data);
+    document.getElementById('status-text').textContent = 'Sensitivity analysis complete';
+}
+
+function renderSensitivityCharts(data){
+    const factors = data.factors || [];
+    const ages = Array.from({length:100},(_,i)=>i);
+    const log10 = v => v>0 ? Math.log10(v) : null;
+    const colors = ['#e53935','#fb8c00','#43a047','#1e88e5','#8e24aa'];
+
+    // Incidence rates overlay
+    const incData = (data.agg_stats && data.agg_stats.incidence_rates) ? data.agg_stats.incidence_rates : [];
+    if(incData.length > 0){
+        const traces = incData.map((arr, i) => ({
+            x: ages, y: arr.map(log10),
+            type: 'scatter', mode: 'lines',
+            name: '×'+factors[i].toFixed(2),
+            line: {color: colors[i], width: 2}
+        }));
+        Plotly.newPlot('chart-incidence', traces, {
+            xaxis: {title:'Age', dtick:20}, yaxis: {title:'log10(Incidence)'},
+            margin: {t:5,r:10,b:40,l:50},
+            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
+        }, {responsive: true});
+    }
+    // Mortality rates overlay
+    const mortData = (data.agg_stats && data.agg_stats.mortality_rates) ? data.agg_stats.mortality_rates : [];
+    if(mortData.length > 0){
+        const traces = mortData.map((arr, i) => ({
+            x: ages, y: arr.map(log10),
+            type: 'scatter', mode: 'lines',
+            name: '×'+factors[i].toFixed(2),
+            line: {color: colors[i], width: 2}
+        }));
+        Plotly.newPlot('chart-mortality', traces, {
+            xaxis: {title:'Age', dtick:20}, yaxis: {title:'log10(Mortality)'},
+            margin: {t:5,r:10,b:40,l:50},
+            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
+        }, {responsive: true});
+    }
+    // Survival overlay
+    const survData = (data.agg_stats && data.agg_stats.survival) ? data.agg_stats.survival : [];
+    if(survData.length > 0){
+        const survYears = Array.from({length:20},(_,i)=>i);
+        const traces = survData.map((arr, i) => ({
+            x: survYears, y: arr.slice(0,20),
+            type: 'scatter', mode: 'lines',
+            name: '×'+factors[i].toFixed(2),
+            line: {color: colors[i], width: 2}
+        }));
+        Plotly.newPlot('chart-survival', traces, {
+            xaxis: {title:'Years after diagnosis'},
+            yaxis: {title:'Survival S(t)', range:[0,1]},
+            margin: {t:5,r:10,b:40,l:50},
+            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
+        }, {responsive: true});
+    }
+}
+
+function resetButtons(){ 
+    document.getElementById('btn-run').disabled=false;
+    document.getElementById('btn-fit').disabled=false;
+}
+    </script>
+</body>
+</html>
