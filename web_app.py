@@ -16,6 +16,57 @@ _sim_progress = 0
 _params_edit_cache = None  # Store edited params in-memory
 
 FITTED_PARAMS_FILE = "config/params_fitted.json"
+DATA_DIR = "data"
+ALLOWED_EXTENSIONS = {'csv'}
+
+import pandas as pd
+
+def _validate_aggregate_csv(filepath: str) -> tuple[bool, str]:
+    """Validate aggregate CSV has required columns and valid data."""
+    try:
+        df = pd.read_csv(filepath, sep=';')
+    except Exception as e:
+        return False, f"Failed to parse CSV: {e}"
+    required = ['Age', 'population', 'cases', 'deaths cancer', 'deaths all']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return False, f"Missing columns: {', '.join(missing)}. Required: {', '.join(required)}"
+    # Validate numeric, non-negative
+    for col in required[1:]:  # skip Age
+        if not pd.api.types.is_numeric_dtype(df[col]):
+            return False, f"Column '{col}' must be numeric"
+        if (df[col] < 0).any():
+            return False, f"Column '{col}' contains negative values"
+    # Age must be 0-110
+    if not pd.api.types.is_numeric_dtype(df['Age']):
+        return False, "Column 'Age' must be numeric"
+    if (df['Age'] < 0).any() or (df['Age'] > 110).any():
+        return False, "Column 'Age' values must be between 0 and 110"
+    return True, f"OK ({len(df)} rows)"
+
+def _validate_staging_csv(filepath: str) -> tuple[bool, str]:
+    """Validate staging CSV has required columns and valid data."""
+    try:
+        df = pd.read_csv(filepath, sep=';')
+    except Exception as e:
+        return False, f"Failed to parse CSV: {e}"
+    required = ['Age', 'Stage', 'Aggressiveness']
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        return False, f"Missing columns: {', '.join(missing)}. Required: {', '.join(required)}"
+    # Stage must be 1-4
+    if not pd.api.types.is_numeric_dtype(df['Stage']):
+        return False, "Column 'Stage' must be numeric"
+    invalid_stage = df[~df['Stage'].isin([1, 2, 3, 4])]
+    if len(invalid_stage) > 0:
+        return False, f"Column 'Stage' must be 1-4. Invalid rows: {len(invalid_stage)}"
+    # Aggressiveness must be 0 or 1
+    invalid_agg = df[~df['Aggressiveness'].isin([0, 1])]
+    if len(invalid_agg) > 0:
+        return False, f"Column 'Aggressiveness' must be 0 or 1. Invalid rows: {len(invalid_agg)}"
+    if (df['Age'] < 0).any() or (df['Age'] > 110).any():
+        return False, "Column 'Age' values must be between 0 and 110"
+    return True, f"OK ({len(df)} rows)"
 
 @app.route('/')
 def index():
@@ -129,7 +180,7 @@ def api_sensitivity():
         return jsonify({'error': 'Simulation already running'}), 409
     _sim_running = True
     data = request.get_json() or {}
-    population = int(data.get('population', 10000))
+    population = int(data.get('population', 300000))
     years = int(data.get('years', 15))
     seed = data.get('seed', None)
     factors = data.get('factors', [0.5, 0.75, 1.0, 1.25, 1.5])
@@ -172,6 +223,43 @@ def api_sensitivity_result():
         status=200, mimetype='application/json')
 
 _sensitivity_result = None
+
+@app.route('/api/data/list')
+def api_data_list():
+    """List available CSV data files."""
+    data_dir = Path(DATA_DIR)
+    if not data_dir.exists():
+        return jsonify({'files': []})
+    csv_files = sorted([f.name for f in data_dir.glob('*.csv')])
+    return jsonify({'files': csv_files})
+
+@app.route('/api/data/upload', methods=['POST'])
+def api_data_upload():
+    """Upload and validate a CSV data file."""
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext != 'csv':
+        return jsonify({'error': f'Only .csv files allowed. Got: .{ext}'}), 400
+    
+    data_type = request.form.get('type', 'aggregate')
+    filepath = os.path.join(DATA_DIR, file.filename)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    file.save(filepath)
+    
+    # Validate
+    if data_type == 'aggregate':
+        ok, msg = _validate_aggregate_csv(filepath)
+    else:
+        ok, msg = _validate_staging_csv(filepath)
+    if not ok:
+        os.remove(filepath)  # Delete invalid file
+        return jsonify({'error': msg}), 400
+    
+    return jsonify({'status': 'ok', 'filename': file.filename, 'validation': msg})
 
 @app.route('/api/parameters/save', methods=['POST'])
 def api_save_params():
@@ -260,6 +348,11 @@ def _apply_overrides(p, data):
         p.finish_age = int(data['screening_finish'])
     if 'screening_frequency' in data:
         p.frequency = int(data['screening_frequency'])
+    if 'train_data_filename' in data or 'train_staging_data_filename' in data:
+        p.reinit_with_data_files(
+            train_file=data.get('train_data_filename'),
+            staging_file=data.get('train_staging_data_filename'),
+        )
 
 def main():
     import argparse

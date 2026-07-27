@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional
 import numpy as np
 import time
 import logging
+from scipy.signal import savgol_filter
 
 from .simulation import Simulation
 
@@ -40,7 +41,7 @@ METRICS = [
 def run_sensitivity_analysis(
     param_source: str = "config/parameters.toml",
     seed: Optional[int] = None,
-    population: int = 10000,
+    population: int = 100000,
     years: int = 15,  # Shorter for speed
     factors: Optional[List[float]] = None,
 ) -> Dict[str, Any]:
@@ -96,6 +97,9 @@ def run_sensitivity_analysis(
         'screened_mortality_rates': [],
         'survival': [],
         'survival_screening': [],
+        'years_saved': [],
+        'diagnose_stages_distribution': [],
+        'screening_stages_distribution': [],
     }
 
     for factor in factors:
@@ -126,6 +130,15 @@ def run_sensitivity_analysis(
     dt = time.perf_counter() - t0
     logger.info(f"Sensitivity analysis complete in {dt:.1f}s.")
 
+    # Smooth rate curves with Savitzky-Golay filter for cleaner visualization
+    for key in ['incidence_rates', 'mortality_rates', 'screened_mortality_rates', 'survival', 'survival_screening', 'years_saved']:
+        if key in all_agg_stats and len(all_agg_stats[key])>0:
+            win = min(11, len(all_agg_stats[key][0])-2)
+            if win >= 5 and win%2==1:
+                for i in range(len(all_agg_stats[key])):
+                    all_agg_stats[key][i] = savgol_filter(all_agg_stats[key][i], win, 3)
+                    all_agg_stats[key][i] = np.maximum(all_agg_stats[key][i], 0)
+    
     return {
         'factors': factors,
         'baseline_means': base_means,

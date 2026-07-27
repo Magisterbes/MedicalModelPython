@@ -17,7 +17,7 @@ import pandas as pd
 from .distribution import Distribution, risks_to_distribution
 from .hazard import Hazard, parse_hazard
 from .gompertz import GompertzModel
-from .logistic_regression import LogisticMultiRegression
+from sklearn.linear_model import LogisticRegression
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +349,38 @@ class Parameters:
         """
         self.lead_time_distributions = [1.0 / mean for mean in self.lead_time_by_stage_means]
     
+    def reinit_with_data_files(self, train_file: str = None, staging_file: str = None):
+        """Reinitialize model with alternative data files.
+        
+        This allows switching data sources without recreating the Simulation object.
+        If a filename is provided, it is used; otherwise, the existing filename is kept.
+        
+        Parameters
+        ----------
+        train_file : str, optional
+            Filename for aggregate demographic data (e.g., 'data_agg_rus.csv').
+        staging_file : str, optional
+            Filename for individual staging data (e.g., 'data_ind.csv').
+        """
+        if train_file is not None:
+            self.train_data_filename = train_file
+        if staging_file is not None:
+            self.train_staging_data_filename = staging_file
+        
+        # Reload everything
+        from pathlib import Path
+        data_path = Path(self.data_dir)
+        self._init_frames(data_path)
+        self._init_lead_time()
+        self._load_staging_train_data(data_path)
+        
+        # Update test params
+        test_idx = self.test_parameters.index(self.selected_test)
+        self.test_tp_selected = self.test_tp[test_idx]
+        self.test_fp_selected = self.test_fp[test_idx]
+        
+        logger.info(f"Reinitialized with train={self.train_data_filename}, staging={self.train_staging_data_filename}")
+    
     def _load_staging_train_data(self, data_path: Path):
         """Load individual staging data and train regression + Gompertz models.
         
@@ -382,18 +414,23 @@ class Parameters:
     
     def _get_model(self, df: pd.DataFrame) -> np.ndarray:
         """Train multinomial logistic regression for stage prediction by age.
-        
-        Equivalent to C# Parameters.GetModel().
+        Returns weights in C#-compatible format: (n_features+1, 4) with bias in last row.
         """
         ages = df['Age'].values
         stages = df['Stage'].values.astype(int)
+        n, n_classes = len(ages), 4
         
-        n = len(ages)
         train_X = np.array([_get_age_group_vector(a) for a in ages])
-        train_Y = np.zeros((n, 4))
-        train_Y[np.arange(n), stages - 1] = 1.0
         
-        return LogisticMultiRegression.get_model_by_train_data(train_X, train_Y)
+        # Train sklearn multinomial logistic regression (L-BFGS, fast ~0.1s)
+        model = LogisticRegression(solver='lbfgs', C=1.0, max_iter=1000, random_state=42)
+        model.fit(train_X, stages - 1)
+        
+        # Extract weights in C# format: (n_features + 1, n_classes), bias in last row
+        weights = np.zeros((train_X.shape[1] + 1, n_classes), dtype=np.float64)
+        weights[:train_X.shape[1], :] = model.coef_.T
+        weights[train_X.shape[1], :] = model.intercept_
+        return weights
     
     def _get_stage_by_age_reg_generator(self, reg: np.ndarray, df: pd.DataFrame):
         """Build stage-by-age multinomial generators.
@@ -404,6 +441,7 @@ class Parameters:
         
         min_gr = _get_age_group(df['Age'].min())
         max_gr = _get_age_group(df['Age'].max())
+        nf = reg.shape[0] - 1  # number of features (bias in last row)
         
         for i in range(12):
             age_gr = i * 10
@@ -415,9 +453,10 @@ class Parameters:
             if age_gr >= max_gr:
                 gr_vec = _get_age_group_vector(max_gr)
             
-            # Compute probabilities from regression
-            model = LogisticMultiRegression(reg)
-            probs = model.compute_output(gr_vec)
+            # Compute softmax probabilities from weight matrix
+            scores = gr_vec @ reg[:nf, :] + reg[nf, :]
+            exp_s = np.exp(scores - np.max(scores))
+            probs = exp_s / exp_s.sum()
             self.stage_by_age_reg_generator[age_gr] = probs
     
     def _get_gompertz_model(self, df: pd.DataFrame, is_aggressive: bool) -> GompertzModel:

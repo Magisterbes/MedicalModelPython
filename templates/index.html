@@ -23,22 +23,20 @@
                font-weight: 600; font-size: 0.9em; transition: all 0.2s; }
         .btn-primary { background: #1a237e; color: white; }
         .btn-primary:hover { background: #283593; }
-        .btn-primary:disabled { background: #9e9e9e; cursor: not-allowed; }
         .btn-success { background: #2e7d32; color: white; }
         .btn-warning { background: #e65100; color: white; }
         .btn-secondary { background: #546e7a; color: white; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .summary { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px;
                     box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         .summary h2 { margin-bottom: 15px; color: #1a237e; }
-        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-                        gap: 15px; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px; }
         .summary-card { background: #f5f7ff; border-radius: 6px; padding: 15px; text-align: center;
                          border: 1px solid #e0e0e0; }
         .summary-card .value { font-size: 1.6em; font-weight: 700; color: #1a237e; }
         .summary-card .label { font-size: 0.8em; color: #666; margin-top: 4px; }
         .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .chart-box { background: white; border-radius: 8px; padding: 15px;
-                      box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .chart-box { background: white; border-radius: 8px; padding: 15px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
         .chart-box.full { grid-column: 1 / -1; }
         .chart-box h3 { margin-bottom: 10px; color: #1a237e; font-size: 1.05em; }
         .progress-bar { width: 100%; height: 8px; background: #e0e0e0; border-radius: 4px;
@@ -51,156 +49,133 @@
         .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px; }
         .param-row { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
         .param-row label { font-weight: 400; font-size: 0.82em; color: #555; flex: 1; }
-        .param-row input { width: 100px; font-size: 0.82em; padding: 4px 6px; }
-        .btn-small { padding: 4px 12px; font-size: 0.78em; margin-left: 6px; }
+        .btn-small { padding: 4px 12px; font-size: 0.78em; }
         .collapsible { cursor: pointer; color: #1a237e; font-weight: 600; }
         .collapsible::after { content: ' ▾'; }
         .collapsible.collapsed::after { content: ' ▸'; }
         .collapsible-content { margin-top: 8px; }
         .collapsible-content.collapsed { display: none; }
+        .sens-section { display: none; }
         @media (max-width: 900px) { .charts { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>🩺 MedicalModel2024 — Cancer Screening Microsimulation</h1>
-        <span style="font-size:0.85em;opacity:0.8">v1.0.0 Python</span>
+<div class="header">
+    <h1>🩺 MedicalModel2024 — Cancer Screening Microsimulation</h1>
+    <span style="font-size:0.85em;opacity:0.8">v1.0.0 Python</span>
+</div>
+
+<div class="container">
+    <div class="controls">
+        <div><label>Population:</label><input type="number" id="population" value="50000" min="1000" max="1000000" step="10000" style="width:110px"></div>
+        <div><label>Years:</label><input type="number" id="years" value="30" min="5" max="60" style="width:80px"></div>
+        <div><label>Seed:</label><input type="number" id="seed" placeholder="auto" style="width:100px"></div>
+        <button class="btn btn-success" id="btn-fit" onclick="runFit()">🔧 Fit + Simulate</button>
+        <button class="btn btn-primary" id="btn-run" onclick="runSimulation()">▶ Run Only</button>
+        <span class="status" id="status-text">Ready</span>
+        <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
     </div>
 
-    <div class="container">
-        <div class="controls">
-            <div><label>Population:</label>
-                <input type="number" id="population" value="50000" min="1000" max="1000000" step="10000" style="width:110px">
-            </div>
-            <div><label>Years:</label>
-                <input type="number" id="years" value="30" min="5" max="60" style="width:80px">
-            </div>
-            <div><label>Seed:</label>
-                <input type="number" id="seed" placeholder="auto" style="width:100px">
-            </div>
-            <button class="btn btn-success" id="btn-fit" onclick="runFit()">🔧 Fit + Simulate</button>
-            <button class="btn btn-primary" id="btn-run" onclick="runSimulation()">▶ Run Only</button>
-            <span class="status" id="status-text">Ready</span>
-            <div class="progress-bar" id="progress-bar"><div class="fill" id="progress-fill"></div></div>
-        </div>
-
-        <!-- Collapsible parameter panel -->
-        <div class="param-panel">
-            <span class="collapsible" onclick="toggleParams()" id="params-toggle">⚙ Parameters</span>
-            <div class="collapsible-content collapsed" id="params-content">
-                <div class="param-grid" id="params-grid"></div>
-                <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
-                    <button class="btn btn-secondary btn-small" onclick="saveParams()">💾 Save to File</button>
-                    <button class="btn btn-secondary btn-small" onclick="loadParams()">📂 Load from File</button>
-                    <button class="btn btn-primary btn-small" onclick="runWithParams()">▶ Run with These Params</button>
-                    <button class="btn btn-warning btn-small" onclick="runFit()">🔧 Fit (auto-calibrate)</button>
-                    <button class="btn btn-secondary btn-small" onclick="runSensitivity()">📊 Sensitivity Analysis</button>
-                </div>
+    <div class="param-panel">
+        <span class="collapsible" onclick="toggleParams()" id="params-toggle">⚙ Parameters</span>
+        <div class="collapsible-content collapsed" id="params-content">
+            <div class="param-grid" id="params-grid"></div>
+            <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+                <button class="btn btn-secondary btn-small" onclick="saveParams()">💾 Save</button>
+                <button class="btn btn-secondary btn-small" onclick="loadParams()">📂 Load</button>
+                <button class="btn btn-primary btn-small" onclick="runWithParams()">▶ Run</button>
+                <button class="btn btn-warning btn-small" onclick="runFit()">🔧 Fit</button>
+                <button class="btn btn-secondary btn-small" onclick="runSensitivity()">📊 Sensitivity</button>
             </div>
         </div>
+    </div>
 
-        <div class="summary" id="summary-section" style="display:none">
-            <h2>📊 Simulation Results</h2>
-            <div class="summary-grid" id="summary-grid"></div>
+    <div class="summary" id="summary-section" style="display:none">
+        <h2>📊 Simulation Results</h2>
+        <div class="summary-grid" id="summary-grid"></div>
+    </div>
+
+    <!-- Main charts -->
+    <div class="charts">
+        <div class="chart-box"><h3>Incidence (log10 rates)</h3><div id="chart-incidence" style="height:350px"></div></div>
+        <div class="chart-box"><h3>Mortality (log10 rates)</h3><div id="chart-mortality" style="height:350px"></div></div>
+        <div class="chart-box"><h3>Stage Distribution at Diagnosis</h3><div id="chart-stages" style="height:350px"></div></div>
+        <div class="chart-box"><h3>Cause-Specific Survival</h3><div id="chart-survival" style="height:350px"></div></div>
+        <div class="chart-box full"><h3>Years of Life Saved</h3><div id="chart-years-saved" style="height:300px"></div></div>
+    </div>
+
+    <!-- Sensitivity charts section (hidden by default, shown after sensitivity) -->
+    <div class="sens-section" id="sens-section">
+        <div class="summary" style="margin-top:20px">
+            <h2>📊 Sensitivity Analysis — Lead Time Variation</h2>
+            <div class="summary-grid" id="sens-summary-grid"></div>
         </div>
-
         <div class="charts">
-            <div class="chart-box"><h3>Incidence (log10 rates)</h3><div id="chart-incidence" style="height:350px"></div></div>
-            <div class="chart-box"><h3>Mortality (log10 rates)</h3><div id="chart-mortality" style="height:350px"></div></div>
-            <div class="chart-box"><h3>Stage Distribution at Diagnosis</h3><div id="chart-stages" style="height:350px"></div></div>
-            <div class="chart-box"><h3>Cause-Specific Survival</h3><div id="chart-survival" style="height:350px"></div></div>
-            <div class="chart-box full"><h3>Years of Life Saved</h3><div id="chart-years-saved" style="height:300px"></div></div>
+            <div class="chart-box"><h3>Incidence by LT factor</h3><div id="sens-chart-incidence" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Mortality by LT factor</h3><div id="sens-chart-mortality" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Stage Distribution</h3><div id="sens-chart-stages" style="height:350px"></div></div>
+            <div class="chart-box"><h3>Survival by LT factor</h3><div id="sens-chart-survival" style="height:350px"></div></div>
+            <div class="chart-box full"><h3>Years Saved by LT factor</h3><div id="sens-chart-years-saved" style="height:300px"></div></div>
         </div>
     </div>
+</div>
 
-    <script>
+<script>
 let pollingInterval = null;
 
 function toggleParams(){ 
-    document.getElementById('params-content').classList.toggle('collapsed');
+    const c = document.getElementById('params-content');
+    c.classList.toggle('collapsed');
     document.getElementById('params-toggle').classList.toggle('collapsed');
-    if (!document.getElementById('params-content').classList.contains('collapsed')) loadParamsFromServer();
+    if (!c.classList.contains('collapsed')) loadParamsFromServer();
 }
 
-function runSimulation(){ 
-    const pop = document.getElementById('population').value;
-    const seed = document.getElementById('seed').value || null;
-    startRun({ population: pop, seed: seed, fit: false });
-}
-function runFit(){ 
-    const pop = document.getElementById('population').value;
-    const seed = document.getElementById('seed').value || null;
-    startRun({ population: pop, seed: seed, fit: true });
-}
-
-function gatherOverrideParams(){
-    const inputs = document.querySelectorAll('#params-grid input');
-    const override = {};
-    inputs.forEach(inp => { if (inp.value !== '') override[inp.name] = inp.value; });
-    // Parse arrays/numbers properly
-    const parsed = {};
-    for (const [k,v] of Object.entries(override)) {
-        if (v.includes(',')) parsed[k] = v.split(',').map(x => parseFloat(x.trim())).filter(x=>!isNaN(x));
-        else if (!isNaN(parseFloat(v))) parsed[k] = parseFloat(v);
-        else parsed[k] = v;
-    }
-    return parsed;
-}
-
-function runWithParams(){
-    const pop = document.getElementById('population').value;
-    const seed = document.getElementById('seed').value || null;
-    const override = gatherOverrideParams();
-    startRun({ population: pop, seed: seed, fit: false, override_params: override });
-}
+function runSimulation(){ startRun({ population: document.getElementById('population').value, seed: getSeed(), fit: false }); }
+function runFit(){ startRun({ population: document.getElementById('population').value, seed: getSeed(), fit: true }); }
+function getSeed(){ return document.getElementById('seed').value || null; }
 
 function startRun(params){
-    document.getElementById('btn-run').disabled = true;
-    document.getElementById('btn-fit').disabled = true;
-    document.getElementById('status-text').textContent = 'Initializing...';
-    document.getElementById('progress-bar').style.display = 'block';
-    document.getElementById('progress-fill').style.width = '0%';
+    setButtons(false);
+    setStatus('Initializing...', true);
     fetch('/api/simulate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params) })
         .then(r=>r.json()).then(data=>{
-            if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; resetButtons(); return; }
+            if(data.error){ setStatus('Error: '+data.error, false); setButtons(true); return; }
             pollingInterval = setInterval(pollStatus, 500);
-        }).catch(err=>{ document.getElementById('status-text').textContent='Connection error'; resetButtons(); });
+        }).catch(err=>{ setStatus('Connection error', false); setButtons(true); });
 }
 
 function pollStatus(){
     fetch('/api/status').then(r=>r.json()).then(data=>{
         document.getElementById('progress-fill').style.width = data.progress + '%';
-        document.getElementById('status-text').textContent = data.running ? `Simulating... ${data.progress}%` : 'Ready';
-        if(!data.running && data.has_results){ clearInterval(pollingInterval); loadResults(); resetButtons(); }
+        setStatus(data.running ? `Simulating... ${data.progress}%` : 'Ready', data.running);
+        if(!data.running && data.has_results){ clearInterval(pollingInterval); loadResults(); setButtons(true); }
     });
 }
 
 function loadResults(){
     fetch('/api/results').then(r=>r.json()).then(data=>{
-        if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; return; }
-        renderSummary(data.summary); renderCharts(data.stats);
+        if(data.error){ setStatus('Error: '+data.error, false); return; }
+        showSummary(data.summary);
+        renderCharts(data.stats);
     });
 }
 
-function renderSummary(summary){
-    document.getElementById('summary-section').style.display='block';
-    const g=document.getElementById('summary-grid'); g.innerHTML='';
-    const cards=[
-        {label:'Agents',v:summary.n_agents},{label:'Cancer Cases',v:summary.n_cancer_cases},
-        {label:'Cured (Clinical)',v:summary.n_cured_clinical},{label:'Cured (Screening)',v:summary.n_cured_screening},
-        {label:'Detected by Screening',v:summary.n_screening_detected},{label:'Alive at End',v:summary.n_alive_end},
-        {label:'Years Simulated',v:summary.years_simulated},{label:'Random Seed',v:summary.random_seed},
-    ];
-    cards.forEach(c=>{ g.innerHTML+=`<div class="summary-card"><div class="value">${c.v?.toLocaleString?.()||c.v||'-'}</div><div class="label">${c.label}</div></div>`; });
+function showSummary(summary){
+    const s = document.getElementById('summary-section'); s.style.display='block';
+    const g = document.getElementById('summary-grid'); g.innerHTML='';
+    const cards=[{l:'Agents',v:summary.n_agents},{l:'Cancer Cases',v:summary.n_cancer_cases},
+        {l:'Cured Clinical',v:summary.n_cured_clinical},{l:'Cured Screening',v:summary.n_cured_screening},
+        {l:'Screening Detected',v:summary.n_screening_detected},{l:'Alive at End',v:summary.n_alive_end},
+        {l:'Years Simulated',v:summary.years_simulated},{l:'Random Seed',v:summary.random_seed}];
+    cards.forEach(c=>{ g.innerHTML+=`<div class="summary-card"><div class="value">${c.v?.toLocaleString?.()||c.v||'-'}</div><div class="label">${c.l}</div></div>`; });
 }
 
 function renderCharts(stats){
-    const ages=Array.from({length:100},(_,i)=>i);
-    const log10=v=>v>0?Math.log10(v):null;
-    Plotly.newPlot('chart-incidence',[{x:ages,y:(stats.incidence_rates||[]).map(log10),type:'scatter',mode:'lines',line:{color:'#1a237e',width:2}}],{margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
+    const ages=Array.from({length:100},(_,i)=>i), L=v=>v>0?Math.log10(v):null;
+    Plotly.newPlot('chart-incidence',[{x:ages,y:(stats.incidence_rates||[]).map(L),type:'scatter',mode:'lines',line:{color:'#1a237e',width:2}}],{margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
     Plotly.newPlot('chart-mortality',[
-        {x:ages,y:(stats.mortality_rates||[]).map(log10),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
-        {x:ages,y:(stats.screened_mortality_rates||[]).map(log10),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2,dash:'dash'}}
+        {x:ages,y:(stats.mortality_rates||[]).map(L),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
+        {x:ages,y:(stats.screened_mortality_rates||[]).map(L),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2,dash:'dash'}}
     ],{margin:{t:5,r:10,b:40,l:50},legend:{x:0.6,y:0.95}},{responsive:true});
     Plotly.newPlot('chart-stages',[
         {x:['I','II','III','IV'],y:stats.diagnose_stages_distribution||[],type:'bar',name:'Clinical',marker:{color:'#1a237e'}},
@@ -210,179 +185,192 @@ function renderCharts(stats){
         {x:Array.from({length:20},(_,i)=>i),y:(stats.survival||[]).slice(0,20),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
         {x:Array.from({length:20},(_,i)=>i),y:(stats.survival_screening||[]).slice(0,20),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2}}
     ],{yaxis:{range:[0,1]},margin:{t:5,r:10,b:40,l:50}},{responsive:true});
-    Plotly.newPlot('chart-years-saved',[{x:Array.from({length:(stats.years_saved||[]).length},(_,i)=>i),y:stats.years_saved||[],type:'bar',marker:{color:'#2e7d32'}}],{margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
+    const ys=stats.years_saved||[]; let fy=0,ly=0;
+    for(let i=0;i<ys.length;i++){if(ys[i]>0){fy=i;break;}}
+    for(let i=ys.length-1;i>=0;i--){if(ys[i]>0){ly=i+5;break;}}
+    const tY=ly>0?ys.slice(fy,Math.min(ly,ys.length)):[], tX=Array.from({length:tY.length},(_,i)=>i+fy);
+    Plotly.newPlot('chart-years-saved',[{x:tX,y:tY,type:'bar',marker:{color:'#2e7d32'}}],{xaxis:{dtick:5},margin:{t:5,r:10,b:40,l:50},showlegend:false},{responsive:true});
 }
 
+// --- Parameters ---
 function loadParamsFromServer(){
+    const grid = document.getElementById('params-grid');
+    let html = `<div class="param-group"><h4>Data Files</h4>
+        <div class="param-row"><label>Aggregate data</label><select id="data_aggregate_select" onchange="selectDataFile('data_aggregate')" style="width:180px"><option value="">loading...</option></select></div>
+        <div class="param-row"><label>Staging data</label><select id="data_staging_select" onchange="selectDataFile('data_staging')" style="width:180px"><option value="">loading...</option></select></div>
+    </div>
+    <div class="param-group"><h4>Upload CSV</h4>
+        <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+            <input type="file" accept=".csv" id="data_upload_input" style="font-size:0.78em;padding:4px 6px;width:160px">
+            <select id="upload_type" style="width:85px;font-size:0.7em;padding:4px"><option value="aggregate">Aggr</option><option value="staging">Stage</option></select>
+            <button class="btn btn-secondary btn-small" onclick="uploadDataFromBtn()">Upload</button>
+        </div>
+    </div>`;
+    refreshDataLists();
     fetch('/api/parameters').then(r=>r.json()).then(data=>{
-        if(data.error){ console.log('No params yet — run simulation first'); return; }
-        const grid = document.getElementById('params-grid');
-        const groups = [
-            {name:'Diagnose Hazard', fields:[
-                {id:'diagnose_hazard_constants', label:'Piecewise betas (6 vals)', val:(data.diagnose_hazard_constants||[]).join(',')},
-            ]},
-            {name:'Cancer Death', fields:[
-                {id:'cancer_death_hazard_lambda', label:'Log-hazard lambda', val:data.cancer_death_hazard_lambda},
-            ]},
-            {name:'Treatment', fields:[
-                {id:'treatment_efficiency', label:'Efficiency (4 stages)', val:(data.treatment_efficiency||[]).join(',')},
-                {id:'age_cure_constants', label:'Age cure multipliers (5)', val:(data.age_cure_constants||[]).join(',')},
-            ]},
-            {name:'Lead Time', fields:[
-                {id:'lead_time_means', label:'Lead time means (4)', val:(data.lead_time_means||[]).join(',')},
-            ]},
-            {name:'Screening', fields:[
-                {id:'participation_rate', label:'Participation rate', val:data.participation_rate},
-                {id:'screening_start_age', label:'Start age', val:data.screening_start_age},
-                {id:'screening_finish_age', label:'Finish age', val:data.screening_finish_age},
-                {id:'screening_frequency', label:'Frequency (years)', val:data.screening_frequency},
-            ]},
-            {name:'Gompertz Aggressive', fields:[
-                {id:'gompertz_aggressive', label:'K,C,B_pop,B_std (4 vals)', val:(data.gompertz_aggressive||[]).join(',')},
-            ]},
-            {name:'Gompertz Non-Aggressive', fields:[
-                {id:'gompertz_non_aggressive', label:'K,C,B_pop,B_std (4 vals)', val:(data.gompertz_non_aggressive||[]).join(',')},
-            ]},
-            {name:'Other', fields:[
-                {id:'growth_rate_limits', label:'Growth rate limits (2)', val:(data.growth_rate_limits||[]).join(',')},
-                {id:'aggressiveness_threshold', label:'Aggressiveness threshold', val:data.aggressiveness_threshold},
-                {id:'reoccurrence_prob', label:'Reoccurrence prob', val:data.reoccurrence_prob},
-            ]},
+        if(data.error){ grid.innerHTML = html + '<div class="param-group"><p style="color:#888;font-size:0.85em">Run Fit+Simulate to see calibrated parameters</p></div>'; return; }
+        const groups=[
+            {n:'Diagnose Hazard',f:[{id:'diagnose_hazard_constants',l:'Piecewise betas (6)',v:(data.diagnose_hazard_constants||[]).join(',')}]},
+            {n:'Cancer Death',f:[{id:'cancer_death_hazard_lambda',l:'Log-hazard lambda',v:data.cancer_death_hazard_lambda}]},
+            {n:'Treatment',f:[{id:'treatment_efficiency',l:'Efficiency (4 stages)',v:(data.treatment_efficiency||[]).join(',')},{id:'age_cure_constants',l:'Age cure multipliers (5)',v:(data.age_cure_constants||[]).join(',')}]},
+            {n:'Lead Time',f:[{id:'lead_time_means',l:'Lead time means (4)',v:(data.lead_time_means||[]).join(',')}]},
+            {n:'Screening',f:[{id:'participation_rate',l:'Participation rate',v:data.participation_rate},{id:'screening_start_age',l:'Start age',v:data.screening_start_age},{id:'screening_finish_age',l:'Finish age',v:data.screening_finish_age},{id:'screening_frequency',l:'Frequency',v:data.screening_frequency}]},
+            {n:'Gompertz Aggressive',f:[{id:'gompertz_aggressive',l:'K,C,B_pop,B_std',v:(data.gompertz_aggressive||[]).join(',')}]},
+            {n:'Gompertz Non-Aggressive',f:[{id:'gompertz_non_aggressive',l:'K,C,B_pop,B_std',v:(data.gompertz_non_aggressive||[]).join(',')}]},
+            {n:'Other',f:[{id:'growth_rate_limits',l:'Growth rate limits (2)',v:(data.growth_rate_limits||[]).join(',')},{id:'aggressiveness_threshold',l:'Aggressiveness threshold',v:data.aggressiveness_threshold},{id:'reoccurrence_prob',l:'Reoccurrence prob',v:data.reoccurrence_prob}]},
         ];
-        grid.innerHTML = groups.map(g => {
-            const fields = g.fields.map(f => 
-                `<div class="param-row"><label>${f.label}</label><input name="${f.id}" value="${f.val??''}" style="width:${f.val?.toString().length>20?200:120}px"></div>`
-            ).join('');
-            return `<div class="param-group"><h4>${g.name}</h4>${fields}</div>`;
-        }).join('');
+        html += groups.map(g=>`<div class="param-group"><h4>${g.n}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
+        grid.innerHTML = html;
     });
 }
+function saveParams(){ const n=prompt('File name:','config/params_fitted.json')||'config/params_fitted.json'; fetch('/api/parameters/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:n})}).then(r=>r.json()).then(d=>alert(d.error?'Error: '+d.error:'Saved to '+d.path)); }
+function loadParams(){ const n=prompt('File name:','config/params_fitted.json')||'config/params_fitted.json'; fetch('/api/parameters/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:n})}).then(r=>r.json()).then(d=>{if(d.error){alert('Error: '+d.error);return;}alert('Loaded from '+d.path);loadParamsFromServer();}); }
+function runWithParams(){ startRun({population:document.getElementById('population').value,seed:getSeed(),fit:false,override_params:gatherOverrideParams()}); }
 
-function saveParams(){
-    const saveName = prompt('File name:', 'config/params_fitted.json') || 'config/params_fitted.json';
-    fetch('/api/parameters/save', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({path: saveName})})
-        .then(r=>r.json()).then(d=>{ alert(d.error ? 'Error: '+d.error : 'Saved to '+d.path); });
+function refreshDataLists(){
+    fetch('/api/data/list').then(r=>r.json()).then(d=>{
+        if(!d.files)return;
+        ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s)s.innerHTML=d.files.map(f=>`<option value="${f}">${f}</option>`).join('');});
+    });
+}
+function selectDataFile(fid){ const s=document.getElementById(fid+'_select'); if(s) setStatus('Selected: '+s.value+'. Run simulation to apply.', false); }
+function uploadDataFromBtn(){ uploadData(document.getElementById('data_upload_input').files[0]); }
+function uploadData(file){
+    if(!file){alert('Select a CSV first');return;}
+    const fd=new FormData(); fd.append('file',file); fd.append('type',document.getElementById('upload_type').value||'aggregate');
+    setStatus('Uploading...',true);
+    fetch('/api/data/upload',{method:'POST',body:fd}).then(r=>r.json()).then(d=>{
+        if(d.error){setStatus('Upload error: '+d.error,false);return;}
+        setStatus('Uploaded: '+d.filename+' ('+d.validation+')',false); refreshDataLists();
+    }).catch(err=>{setStatus('Upload failed',false);});
+}
+function gatherOverrideParams(){
+    const override={};
+    document.querySelectorAll('#params-grid input').forEach(inp=>{if(inp.value!=='')override[inp.name]=inp.value;});
+    ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s&&s.value){override[id.replace('_select','')+'_filename']=s.value;}});
+    const parsed={};
+    for(const[k,v]of Object.entries(override)){
+        if(k.endsWith('_filename')){parsed[k]=v;continue;}
+        if(v.includes(','))parsed[k]=v.split(',').map(x=>parseFloat(x.trim())).filter(x=>!isNaN(x));
+        else if(!isNaN(parseFloat(v)))parsed[k]=parseFloat(v); else parsed[k]=v;
+    }
+    return parsed;
 }
 
-function loadParams(){
-    const loadName = prompt('File name:', 'config/params_fitted.json') || 'config/params_fitted.json';
-    fetch('/api/parameters/load', {method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({path: loadName})})
-        .then(r=>r.json()).then(d=>{ 
-            if(d.error){ alert('Error: '+d.error); return; }
-            alert('Loaded from '+d.path); loadParamsFromServer(); 
-        });
-}
-
+// --- Sensitivity Analysis ---
 function runSensitivity(){
-    const pop = document.getElementById('population').value;
-    const seed = document.getElementById('seed').value || null;
-    document.getElementById('status-text').textContent = 'Running sensitivity analysis...';
-    document.getElementById('progress-bar').style.display = 'block';
-    document.getElementById('progress-fill').style.width = '20%';
-    document.getElementById('btn-run').disabled = true;
-    document.getElementById('btn-fit').disabled = true;
-    fetch('/api/sensitivity', { method:'POST', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({ population: Math.max(Math.min(pop, 100000), 50000), years: 30, seed: seed,
-            factors: [0.5, 0.75, 1.0, 1.25, 1.5] }) })
+    const pop=document.getElementById('population').value;
+    setButtons(false); setStatus('Running sensitivity analysis...', true);
+    fetch('/api/sensitivity',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({population:Math.max(Math.min(pop,300000),50000),years:30,seed:getSeed(),factors:[0.5,0.75,1.0,1.25,1.5]})})
         .then(r=>r.json()).then(data=>{
-            if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; resetButtons(); return; }
-            pollingInterval = setInterval(pollSensitivity, 1000);
-        }).catch(err=>{ document.getElementById('status-text').textContent='Connection error'; resetButtons(); });
+            if(data.error){setStatus('Error: '+data.error,false);setButtons(true);return;}
+            pollingInterval=setInterval(pollSensitivity,1000);
+        }).catch(err=>{setStatus('Connection error',false);setButtons(true);});
 }
-
 function pollSensitivity(){
     fetch('/api/status').then(r=>r.json()).then(d=>{
-        document.getElementById('progress-fill').style.width = (20 + 70 * (d.progress/100)) + '%';
-        if(!d.running){ clearInterval(pollingInterval); loadSensitivityResults(); resetButtons(); }
+        document.getElementById('progress-fill').style.width=(20+70*(d.progress/100))+'%';
+        if(!d.running){clearInterval(pollingInterval);loadSensitivityResults();setButtons(true);}
     });
 }
-
 function loadSensitivityResults(){
     fetch('/api/sensitivity/result').then(r=>r.json()).then(data=>{
-        if(data.error){ document.getElementById('status-text').textContent='Error: '+data.error; return; }
-        document.getElementById('status-text').textContent = 'Sensitivity done in '+(data.runtime_sec||0).toFixed(1)+'s';
-        renderSensitivitySummary(data);
+        if(data.error){setStatus('Error: '+data.error,false);return;}
+        setStatus('Sensitivity done in '+(data.runtime_sec||0).toFixed(1)+'s. Rendering charts...',false);
+        drawSensitivity(data);
     });
 }
-
-function renderSensitivitySummary(data){
-    const factors = data.factors || [];
-    const baseline = data.baseline_means || [];
-    document.getElementById('summary-section').style.display='block';
-    const g=document.getElementById('summary-grid');
-    g.innerHTML='<div class="summary-card"><div class="value" style="font-size:1em">Lead Time Means: ['+baseline.join(', ')+'] × Factors</div><div class="label">Sensitivity Analysis</div></div>';
-    if(data.metrics) {
-        const m = data.metrics;
-        ['n_cancer_cases','n_cured_clinical','n_cured_screening','n_screening_detected'].forEach(k=>{
-            if(m[k]) g.innerHTML+=`<div class="summary-card"><div class="value" style="font-size:1em">${m[k].join(' → ')}</div><div class="label">${k.replace(/_/g,' ')} (0.5→1→1.5)</div></div>`;
+function drawSensitivity(data){
+    const factors=data.factors||[],baseline=data.baseline_means||[];
+    
+    // Show sensitivity section
+    document.getElementById('sens-section').style.display='block';
+    
+    // Summary grid
+    const sg=document.getElementById('sens-summary-grid');
+    sg.innerHTML='<div class="summary-card" style="grid-column:1/-1"><div class="value" style="font-size:1em">LT means: ['+baseline.join(', ')+'] × ['+factors.join(', ')+']</div><div class="label">Sensitivity Analysis — '+(data.runtime_sec||0).toFixed(1)+'s</div></div>';
+    
+    if(data.metrics){
+        const m=data.metrics;
+        ['n_cancer_cases','n_cured_clinical','n_cured_screening','n_screening_detected','n_alive_end'].forEach(k=>{
+            const a=m[k]; if(!a||a.length<3)return;
+            const lo=Math.min(a[0],a[a.length-1]),hi=Math.max(a[0],a[a.length-1]),r=Math.max(hi-lo,1);
+            sg.innerHTML+=`<div class="summary-card"><div class="value" style="font-size:1em">${lo}...${hi}</div><div class="label">${k.replace(/_/g,' ')} (×0.5→×1.5)</div></div>`;
         });
     }
-    // Plot sensitivity curves
-    renderSensitivityCharts(data);
-    document.getElementById('status-text').textContent = 'Sensitivity analysis complete';
-}
-
-function renderSensitivityCharts(data){
-    const factors = data.factors || [];
-    const ages = Array.from({length:100},(_,i)=>i);
-    const log10 = v => v>0 ? Math.log10(v) : null;
-    const colors = ['#e53935','#fb8c00','#43a047','#1e88e5','#8e24aa'];
-
-    // Incidence rates overlay
-    const incData = (data.agg_stats && data.agg_stats.incidence_rates) ? data.agg_stats.incidence_rates : [];
-    if(incData.length > 0){
-        const traces = incData.map((arr, i) => ({
-            x: ages, y: arr.map(log10),
-            type: 'scatter', mode: 'lines',
-            name: '×'+factors[i].toFixed(2),
-            line: {color: colors[i], width: 2}
-        }));
-        Plotly.newPlot('chart-incidence', traces, {
-            xaxis: {title:'Age', dtick:20}, yaxis: {title:'log10(Incidence)'},
-            margin: {t:5,r:10,b:40,l:50},
-            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
-        }, {responsive: true});
+    
+    // Charts with NEW div IDs
+    const ages=Array.from({length:100},(_,i)=>i), L=v=>v>0?Math.log10(v):null;
+    const colors=['#e53935','#fb8c00','#43a047','#1e88e5','#8e24aa'];
+    const a=data.agg_stats||{};
+    
+    const incData=a.incidence_rates||[];
+    if(incData.length>0){
+        Plotly.newPlot('sens-chart-incidence', incData.map((arr,i)=>({x:ages,y:arr.map(L),type:'scatter',mode:'lines',name:'×'+factors[i].toFixed(2),line:{color:colors[i],width:2}})),
+            {xaxis:{title:'Age',dtick:20},yaxis:{title:'log10(Incidence)'},margin:{t:5,r:10,b:40,l:50},legend:{x:0.7,y:0.95,title:{text:'LT factor'}}},{responsive:true});
     }
-    // Mortality rates overlay
-    const mortData = (data.agg_stats && data.agg_stats.mortality_rates) ? data.agg_stats.mortality_rates : [];
-    if(mortData.length > 0){
-        const traces = mortData.map((arr, i) => ({
-            x: ages, y: arr.map(log10),
-            type: 'scatter', mode: 'lines',
-            name: '×'+factors[i].toFixed(2),
-            line: {color: colors[i], width: 2}
-        }));
-        Plotly.newPlot('chart-mortality', traces, {
-            xaxis: {title:'Age', dtick:20}, yaxis: {title:'log10(Mortality)'},
-            margin: {t:5,r:10,b:40,l:50},
-            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
-        }, {responsive: true});
+    const mortData=a.mortality_rates||[];
+    if(mortData.length>0){
+        Plotly.newPlot('sens-chart-mortality', mortData.map((arr,i)=>({x:ages,y:arr.map(L),type:'scatter',mode:'lines',name:'×'+factors[i].toFixed(2),line:{color:colors[i],width:2}})),
+            {xaxis:{title:'Age',dtick:20},yaxis:{title:'log10(Mortality)'},margin:{t:5,r:10,b:40,l:50},legend:{x:0.7,y:0.95,title:{text:'LT factor'}}},{responsive:true});
     }
-    // Survival overlay
-    const survData = (data.agg_stats && data.agg_stats.survival) ? data.agg_stats.survival : [];
-    if(survData.length > 0){
-        const survYears = Array.from({length:20},(_,i)=>i);
-        const traces = survData.map((arr, i) => ({
-            x: survYears, y: arr.slice(0,20),
-            type: 'scatter', mode: 'lines',
-            name: '×'+factors[i].toFixed(2),
-            line: {color: colors[i], width: 2}
-        }));
-        Plotly.newPlot('chart-survival', traces, {
-            xaxis: {title:'Years after diagnosis'},
-            yaxis: {title:'Survival S(t)', range:[0,1]},
-            margin: {t:5,r:10,b:40,l:50},
-            legend: {x:0.7, y:0.95, title: {text: 'LT factor'}}
-        }, {responsive: true});
+    const survData=a.survival||[];
+    if(survData.length>0){
+        const sv=Array.from({length:20},(_,i)=>i);
+        Plotly.newPlot('sens-chart-survival', survData.map((arr,i)=>({x:sv,y:arr.slice(0,20),type:'scatter',mode:'lines',name:'×'+factors[i].toFixed(2),line:{color:colors[i],width:2}})),
+            {xaxis:{title:'Years after diagnosis'},yaxis:{title:'Survival S(t)',range:[0,1]},margin:{t:5,r:10,b:40,l:50},legend:{x:0.7,y:0.95,title:{text:'LT factor'}}},{responsive:true});
     }
+    // Stage distribution — show baseline factor (×1.0) as grouped bars
+    const diagStages = (a.diagnose_stages_distribution && a.diagnose_stages_distribution.length>2) 
+                        ? a.diagnose_stages_distribution[2] : null;
+    const scrStages = (a.screening_stages_distribution && a.screening_stages_distribution.length>2)
+                       ? a.screening_stages_distribution[2] : null;
+    if(diagStages && scrStages){
+        Plotly.newPlot('sens-chart-stages',[
+            {x:['I','II','III','IV'],y:diagStages,type:'bar',name:'Clinical',marker:{color:'#1a237e'}},
+            {x:['I','II','III','IV'],y:scrStages,type:'bar',name:'Screening',marker:{color:'#2e7d32'}}
+        ],{margin:{t:5,r:10,b:40,l:50},barmode:'group'},{responsive:true});
+    }
+    // Years saved — filled area curves for all factors (semi-transparent)
+    const ysData = a.years_saved||[];
+    if(ysData.length>0){
+        // Find non-zero range across all factors
+        let fy=0, ly=0;
+        ysData.forEach(arr=>{
+            for(let i=0;i<arr.length;i++){if(arr[i]>0){if(fy===0||i<fy)fy=i;break;}}
+            for(let i=arr.length-1;i>=0;i--){if(arr[i]>0){if(i+5>ly)ly=i+5;break;}}
+        });
+        const mx = Math.max(ly-fy, 10);
+        const ysX = Array.from({length:mx},(_,i)=>i+fy);
+        const traces = ysData.map((arr,i)=>{
+            const yv = arr.slice(fy,Math.min(fy+mx,arr.length));
+            return {
+                x: ysX.slice(0,yv.length), y: yv,
+                type:'scatter', mode:'lines',
+                name:'×'+factors[i].toFixed(2),
+                fill:'tozeroy',
+                fillcolor: colors[i]+'33',  // hex + alpha
+                line:{color:colors[i],width:2}
+            };
+        });
+        Plotly.newPlot('sens-chart-years-saved', traces,
+            {xaxis:{title:'Age',dtick:5},yaxis:{title:'Years saved'},
+             margin:{t:5,r:10,b:40,l:50},
+             legend:{x:0.7,y:0.95,title:{text:'LT factor'}}},{responsive:true});
+    }
+    
+    setStatus('Sensitivity complete. Charts drawn below.', false);
 }
-
-function resetButtons(){ 
-    document.getElementById('btn-run').disabled=false;
-    document.getElementById('btn-fit').disabled=false;
+function setButtons(enabled){
+    document.getElementById('btn-run').disabled=!enabled;
+    document.getElementById('btn-fit').disabled=!enabled;
 }
-    </script>
+function setStatus(msg,showProgress){
+    document.getElementById('status-text').textContent=msg;
+    if(showProgress)document.getElementById('progress-bar').style.display='block';
+    else setTimeout(()=>document.getElementById('progress-bar').style.display='none',2000);
+}
+</script>
 </body>
 </html>
