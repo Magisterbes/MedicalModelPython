@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MedicalModel2024 — Cancer Screening Microsimulation</title>
+    <title>Cancer Screening Microsimulation</title>
     <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -253,8 +253,13 @@ function runWithParams(){ startRun({population:document.getElementById('populati
 
 function refreshDataLists(){
     fetch('/api/data/list').then(r=>r.json()).then(d=>{
-        if(!d.files)return;
-        ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s)s.innerHTML=d.files.map(f=>`<option value="${f}">${f}</option>`).join('');});
+        if(!d)return;
+        const fill=(id,list)=>{const s=document.getElementById(id);if(!s)return;
+            const cur=s.value;
+            s.innerHTML='<option value="">(default from config)</option>'+(list||[]).map(f=>`<option value="${f}">${f}</option>`).join('');
+            if(cur)s.value=cur;};
+        fill('data_aggregate_select', d.aggregate);
+        fill('data_staging_select', d.staging);
     });
 }
 function selectDataFile(fid){ const s=document.getElementById(fid+'_select'); if(s) setStatus('Selected: '+s.value+'. Run simulation to apply.', false); }
@@ -271,7 +276,7 @@ function uploadData(file){
 function gatherOverrideParams(){
     const override={};
     document.querySelectorAll('#params-grid input').forEach(inp=>{if(inp.value!=='')override[inp.name]=inp.value;});
-    ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s&&s.value){override[id.replace('_select','')+'_filename']=s.value;}});
+    ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s&&s.value){override[id==='data_aggregate_select'?'train_data_filename':'train_staging_data_filename']=s.value;}});
     const parsed={};
     for(const[k,v]of Object.entries(override)){
         if(k.endsWith('_filename')){parsed[k]=v;continue;}

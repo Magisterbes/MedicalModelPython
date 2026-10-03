@@ -1,11 +1,16 @@
 # syntax=docker/dockerfile:1
 # MedicalModel2024 — Cancer Screening Microsimulation (Flask web UI)
 #
-# Build:   docker build -t med_flask_app:latest .
-# Run:     docker run --rm -p 5000:5000 --name flask_tutorial med_flask_app:latest
+# Build:   docker build -t medicalmodel2024:latest .
+# Run:     docker run --rm -p 5000:5000 --name medicalmodel2024 medicalmodel2024:latest
 # Compose: docker compose up --build
 
 FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="MedicalModel2024" \
+      org.opencontainers.image.description="Cancer screening microsimulation — Flask web UI on top of a Numba-accelerated agent-based model" \
+      org.opencontainers.image.source="https://github.com/Magisterbes/MedicalModelPython" \
+      org.opencontainers.image.licenses="Academic use"
 
 # --- Runtime environment ------------------------------------------------------
 ENV PYTHONUNBUFFERED=1 \

@@ -2,8 +2,8 @@ services:
   web:
     build:
       context: .
-    image: med_flask_app:latest
-    container_name: flask_tutorial
+    image: medicalmodel2024:latest
+    container_name: medicalmodel2024
     ports:
       - "5000:5000"
     environment:

@@ -230,12 +230,22 @@ _sensitivity_result = None
 
 @app.route('/api/data/list')
 def api_data_list():
-    """List available CSV data files."""
+    """List available CSV data files, classified by dataset kind."""
     data_dir = Path(DATA_DIR)
     if not data_dir.exists():
-        return jsonify({'files': []})
-    csv_files = sorted([f.name for f in data_dir.glob('*.csv')])
-    return jsonify({'files': csv_files})
+        return jsonify({'aggregate': [], 'staging': [], 'files': []})
+    aggregate, staging = [], []
+    for f in sorted(data_dir.glob('*.csv')):
+        ok_agg, _ = _validate_aggregate_csv(str(f))
+        if ok_agg:
+            aggregate.append(f.name)
+            continue
+        ok_stg, _ = _validate_staging_csv(str(f))
+        if ok_stg:
+            staging.append(f.name)
+    # 'files' kept for backward compatibility (union of both kinds)
+    return jsonify({'aggregate': aggregate, 'staging': staging,
+                    'files': aggregate + staging})
 
 @app.route('/api/data/upload', methods=['POST'])
 def api_data_upload():
@@ -346,16 +356,22 @@ def _apply_overrides(p, data):
         p.aggressiveness_rate_threshold = float(data['aggressiveness_threshold'])
     if 'reoccurrence_prob' in data:
         p.reoccurrence_probability = float(data['reoccurrence_prob'])
-    if 'screening_start' in data:
-        p.start_age = int(data['screening_start'])
-    if 'screening_finish' in data:
-        p.finish_age = int(data['screening_finish'])
+    # Screening settings — accept both the UI keys and the canonical ones
+    start_age = data.get('screening_start', data.get('screening_start_age'))
+    if start_age is not None:
+        p.start_age = int(start_age)
+    finish_age = data.get('screening_finish', data.get('screening_finish_age'))
+    if finish_age is not None:
+        p.finish_age = int(finish_age)
     if 'screening_frequency' in data:
         p.frequency = int(data['screening_frequency'])
-    if 'train_data_filename' in data or 'train_staging_data_filename' in data:
+    # Data files — accept both the UI keys and the canonical ones
+    train_file = data.get('train_data_filename', data.get('data_aggregate_filename'))
+    staging_file = data.get('train_staging_data_filename', data.get('data_staging_filename'))
+    if train_file is not None or staging_file is not None:
         p.reinit_with_data_files(
-            train_file=data.get('train_data_filename'),
-            staging_file=data.get('train_staging_data_filename'),
+            train_file=train_file,
+            staging_file=staging_file,
         )
 
 def main():

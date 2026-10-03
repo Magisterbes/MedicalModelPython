@@ -23,10 +23,10 @@ python web_app.py
 
 ```bash
 # Build the image
-docker build -t med_flask_app:latest .
+docker build -t medicalmodel2024:latest .
 
 # Run the web UI → http://localhost:5000
-docker run --rm -p 5000:5000 --name flask_tutorial med_flask_app:latest
+docker run --rm -p 5000:5000 --name medicalmodel2024 medicalmodel2024:latest
 
 # …or use Docker Compose (persists output/, config/ and data/ on the host)
 docker compose up --build
@@ -56,6 +56,8 @@ installs a proper init (`tini`) for clean signal handling.
 MedicalModelPython/
 ├── run_simulation.py           # CLI entry point
 ├── web_app.py                  # Flask web server with REST API
+├── Dockerfile                  # Container image (non-root, health check, Numba warm-up)
+├── docker-compose.yml          # One-command run with volume mounts
 ├── model/                      # Core simulation engine
 │   ├── simulation.py           # Main loop, annual iteration, orchestration
 │   ├── population.py           # Population as Structure-of-Arrays + Numba JIT kernels
@@ -65,10 +67,10 @@ MedicalModelPython/
 │   ├── distribution.py         # Empirical CDF/PDF distributions (vectorized)
 │   ├── random.py               # Reproducible RNG with seed tracking
 │   ├── stats.py                # Statistics collection, rates, survival curves
-│   └── sensitivity.py          # Lead-time sensitivity + Savitzky-Golay smoothing
+│   └── sensitivity.py          # Parallel lead-time sensitivity + Savitzky-Golay smoothing
 ├── optimization/               # Parameter calibration
 │   ├── objective_diag.py       # Diagnosis hazard (Poisson MLE, L-BFGS-B)
-│   ├── objective_gompertz.py   # Gompertz growth (cross-entropy, Nelder-Mead)
+│   ├── objective_gompertz.py   # Gompertz growth (vectorized cross-entropy, Nelder-Mead)
 │   └── objective_mort.py       # Cancer death hazard (Poisson MLE, L-BFGS-B)
 ├── config/
 │   └── parameters.toml         # Model configuration
@@ -80,6 +82,7 @@ MedicalModelPython/
 ├── python_port_analysis.tex    # Scientific analysis with equations and validity critique
 ├── model_for_dummies.tex       # Plain-language guide (no formulas)
 ├── test_fit_speed.py           # Benchmark for calibration speed
+├── test_sensitivity_api.py     # Smoke test for the sensitivity API
 └── requirements.txt            # Python dependencies
 ```
 
