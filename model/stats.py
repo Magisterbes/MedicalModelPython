@@ -35,7 +35,6 @@ class StatsCollection:
     def gather_stats(self, population, params, current_date):
         pop = population
         final_ages = pop.ages(current_date)
-        n = pop.n_agents
         has_c = pop.has_cancer
         d_age = pop.diagnosis_age
         n_death = pop.natural_death_age
@@ -43,63 +42,74 @@ class StatsCollection:
         cur = current_date
         agg = self.agg_stats
 
-        # Diagnose stage distribution
+        # Diagnose stage distribution (vectorized via np.bincount)
         mask = (d_age != -1) & (d_age < n_death) & (d_age + db <= cur) & (pop.cancer_diagnose_stage != -1)
-        for idx in np.where(mask)[0]:
-            st = pop.cancer_diagnose_stage[idx] - 1
-            if 0 <= st < 4:
-                agg['diagnose_stages_distribution'][st] += 1
+        st = pop.cancer_diagnose_stage[mask].astype(np.int64) - 1
+        st = st[(st >= 0) & (st < 4)]
+        if st.size:
+            agg['diagnose_stages_distribution'][:4] += np.bincount(st, minlength=4)[:4]
 
-        # After-diagnosis & screening stages
-        for idx in np.where(has_c)[0]:
-            diff = pop.cancer_stages_ages[idx, 3] - d_age[idx]
-            diff = min(max(int(diff), 0), 199)
-            agg['after_diagnosis'][diff] += 1
-            if pop.cancer_screening_stage[idx] != -1:
-                st = pop.cancer_screening_stage[idx] - 1
-                if 0 <= st < 4:
-                    agg['screening_stages_distribution'][st] += 1
+        idxc = np.where(has_c)[0]
+
+        # After-diagnosis & screening stages (vectorized)
+        if idxc.size:
+            diff = (pop.cancer_stages_ages[idxc, 3].astype(np.int64)
+                    - d_age[idxc].astype(np.int64))
+            diff = np.clip(diff, 0, 199)
+            agg['after_diagnosis'][:200] += np.bincount(diff, minlength=200)[:200]
+
+            scr_st = pop.cancer_screening_stage[idxc].astype(np.int64) - 1
+            scr_st = scr_st[(scr_st >= 0) & (scr_st < 4)]
+            if scr_st.size:
+                agg['screening_stages_distribution'][:4] += np.bincount(scr_st, minlength=4)[:4]
 
         # Survival curves (vectorized)
         _calc_survival_batch(pop, final_ages, agg)
 
-        # People saved / years saved
-        for idx in range(n):
-            if not has_c[idx]:
-                continue
-            # Death cause logic inline
-            init_d = pop.cancer_death_age_init[idx]
-            nat_d = n_death[idx]
-            cured = pop.cancer_is_cured[idx]
-            scr_cured = pop.cancer_is_screening_cured[idx]
-            alive = pop.is_alive[idx]
+        # People saved / years saved (vectorized over cancer agents)
+        if idxc.size:
+            init_d = pop.cancer_death_age_init[idxc]
+            nat_d = n_death[idxc].astype(np.float64)
+            cured = pop.cancer_is_cured[idxc]
+            scr_cured = pop.cancer_is_screening_cured[idxc]
+            alive = pop.is_alive[idxc]
+            inc_c = pop.cancer_incidence_age[idxc].astype(np.int64)
+            scr_death = pop.cancer_death_age_screen[idxc]
+            scr_age = pop.cancer_screening_age[idxc]
+            fin = final_ages[idxc]
+            ps = agg['people_saved']
+            ys = agg['years_saved']
 
-            if nat_d <= init_d:
-                if cured:
-                    pass  # NaturalCured
-                elif scr_cured and not cured:
-                    # NaturalSavedByScreening
-                    inc = int(pop.cancer_incidence_age[idx])
-                    if 0 <= inc < len(agg['people_saved']):
-                        agg['people_saved'][inc] += 1
-                    for t in range(int(pop.cancer_death_age_screen[idx]), int(nat_d)):
-                        if 0 <= t < len(agg['years_saved']):
-                            agg['years_saved'][t] += 1
-            else:
-                if not cured and not scr_cured:
-                    pass  # Cancer death
-                elif cured:
-                    pass  # NaturalCured
-                elif scr_cured:
-                    # Case 2: still alive, screening cured
-                    if alive and not cured and scr_cured:
-                        inc = int(pop.cancer_incidence_age[idx])
-                        if pop.cancer_screening_age[idx] <= final_ages[idx] and init_d <= final_ages[idx]:
-                            if 0 <= inc < len(agg['people_saved']):
-                                agg['people_saved'][inc] += 1
-                            yrs = pop.cancer_death_age_screen[idx] - init_d
-                            if 0 <= inc < len(agg['years_saved']):
-                                agg['years_saved'][inc] += float(max(yrs, 0))
+            # Branch 1: natural death no later than cancer death, rescued by screening
+            m1 = (nat_d <= init_d) & scr_cured & (~cured)
+            if m1.any():
+                inc1 = inc_c[m1]
+                v = (inc1 >= 0) & (inc1 < ps.shape[0])
+                if v.any():
+                    ps[:] += np.bincount(inc1[v], minlength=ps.shape[0])[:ps.shape[0]]
+                lo = scr_death[m1].astype(np.int64)
+                hi = nat_d[m1].astype(np.int64)
+                for k in range(lo.shape[0]):
+                    t0 = max(int(lo[k]), 0)
+                    t1 = min(int(hi[k]), ys.shape[0])
+                    if t1 > t0:
+                        ys[t0:t1] += 1.0
+
+            # Branch 2: cancer death later than natural death (still alive), rescued
+            m2 = (nat_d > init_d) & scr_cured & (~cured) & alive
+            if m2.any():
+                within = (scr_age[m2] <= fin[m2]) & (init_d[m2] <= fin[m2])
+                sel = np.where(m2)[0][within]
+                if sel.size:
+                    inc2 = inc_c[sel]
+                    v = (inc2 >= 0) & (inc2 < ps.shape[0])
+                    if v.any():
+                        ps[:] += np.bincount(inc2[v], minlength=ps.shape[0])[:ps.shape[0]]
+                    yrs = np.maximum(scr_death[sel] - init_d[sel], 0.0)
+                    vy = (inc2 >= 0) & (inc2 < ys.shape[0])
+                    if vy.any():
+                        ys[:] += np.bincount(inc2[vy], weights=yrs[vy],
+                                             minlength=ys.shape[0])[:ys.shape[0]]
 
         self._gather_calc()
 
@@ -117,47 +127,88 @@ class StatsCollection:
 
 
 def _calc_survival_batch(pop, final_ages, agg):
+    """Vectorized survival-curve accumulation over diagnosed cancer agents."""
     has_c = pop.has_cancer
-    d_age = pop.diagnosis_age
-    n_death = pop.natural_death_age
-    scr_found = pop.cancer_screening_found
-    scr_age = pop.cancer_screening_age
-    scr_cured = pop.cancer_is_screening_cured
-    init_death = pop.cancer_death_age_init
-    scr_death = pop.cancer_death_age_screen
+    idxc = np.where(has_c)[0]
+    if idxc.size == 0:
+        return
 
-    for idx in range(pop.n_agents):
-        if not has_c[idx]:
-            continue
-        if d_age[idx] > final_ages[idx] or d_age[idx] == -1:
-            continue
+    d_age_all = pop.diagnosis_age[idxc]
+    final_all = final_ages[idxc]
+    # Only agents already diagnosed by the end of the run are considered
+    keep = (d_age_all != -1) & (d_age_all <= final_all)
+    idxc = idxc[keep]
+    if idxc.size == 0:
+        return
 
-        # Effective death age with screening
-        if scr_found[idx] and scr_cured[idx]:
-            eff_death_screen = scr_death[idx]
-            eff_start = scr_age[idx]
-        else:
-            eff_death_screen = init_death[idx]
-            eff_start = d_age[idx]
-        
-        min_no_screen = min(float(n_death[idx]), float(final_ages[idx]),
-                            init_death[idx] if init_death[idx] != -1 else 1e9)
-        min_screen = min(float(n_death[idx]), float(final_ages[idx]),
-                         eff_death_screen if eff_death_screen != -1 else 1e9)
+    d_age = pop.diagnosis_age[idxc]
+    final = final_ages[idxc].astype(np.float64)
+    n_death = pop.natural_death_age[idxc].astype(np.float64)
+    scr_found = pop.cancer_screening_found[idxc]
+    scr_age = pop.cancer_screening_age[idxc]
+    scr_cured = pop.cancer_is_screening_cured[idxc]
+    init_death = pop.cancer_death_age_init[idxc]
+    scr_death = pop.cancer_death_age_screen[idxc]
 
-        _itter_surv(eff_start, int(min_screen), agg, 'survival_screening')
-        _itter_surv(d_age[idx], int(min_no_screen), agg, 'survival')
+    # Effective death age / start with screening
+    use_screen = scr_found & scr_cured
+    eff_death_screen = np.where(use_screen, scr_death, init_death)
+    eff_start = np.where(use_screen, scr_age, d_age)
 
-        # Cancer mortality age (time from diagnosis to death)
-        if init_death[idx] != -1 and init_death[idx] <= n_death[idx]:
-            diff = int(init_death[idx] - d_age[idx])
-            if 0 <= diff < len(agg['cancer_mortality_age']):
-                agg['cancer_mortality_age'][diff] += 1
-        # Screening-affected mortality age
-        if eff_death_screen != -1 and eff_death_screen <= n_death[idx]:
-            diff = int(eff_death_screen - eff_start)
-            if 0 <= diff < len(agg['cancer_mortality_age_screen']):
-                agg['cancer_mortality_age_screen'][diff] += 1
+    init_for_no = np.where(init_death != -1, init_death, 1e9)
+    eff_for_screen = np.where(eff_death_screen != -1, eff_death_screen, 1e9)
+    base = np.minimum(n_death, final)
+    min_no_screen = np.minimum(base, init_for_no).astype(np.int64)
+    min_screen = np.minimum(base, eff_for_screen).astype(np.int64)
+
+    _itter_surv_batch(eff_start, min_screen, agg, 'survival_screening')
+    _itter_surv_batch(d_age, min_no_screen, agg, 'survival')
+
+    # Cancer mortality age (time from diagnosis to death)
+    m = (init_death != -1) & (init_death <= n_death)
+    if m.any():
+        diff = (init_death[m] - d_age[m]).astype(np.int64)
+        L = agg['cancer_mortality_age'].shape[0]
+        diff = diff[(diff >= 0) & (diff < L)]
+        if diff.size:
+            agg['cancer_mortality_age'][:] += np.bincount(diff, minlength=L)[:L]
+    # Screening-affected mortality age
+    m2 = (eff_death_screen != -1) & (eff_death_screen <= n_death)
+    if m2.any():
+        diff = (eff_death_screen[m2] - eff_start[m2]).astype(np.int64)
+        L = agg['cancer_mortality_age_screen'].shape[0]
+        diff = diff[(diff >= 0) & (diff < L)]
+        if diff.size:
+            agg['cancer_mortality_age_screen'][:] += np.bincount(diff, minlength=L)[:L]
+
+
+def _itter_surv_batch(begs, fins, agg, key):
+    """Vectorized equivalent of `_itter_surv` over arrays of (beg, fin).
+
+    For each valid (beg, fin): increments agg[key][0] by 1 and agg[key][1..fin-beg]
+    by 1.0 — reproducing the per-agent Python loop of the original.
+    """
+    arr = agg[key]
+    L = arr.shape[0]
+    begs = np.asarray(begs, dtype=np.int64)
+    fins = np.asarray(fins, dtype=np.int64)
+    begs = np.maximum(begs, 0)
+    fins = np.minimum(fins, L - 1)
+    ok = fins >= begs
+    begs = begs[ok]
+    fins = fins[ok]
+    if begs.size == 0:
+        return
+
+    arr[0] += begs.shape[0]
+    lengths = fins - begs
+    diff = np.zeros(L + 1, dtype=np.float64)
+    diff[1] += begs.shape[0]
+    end = lengths + 1
+    end = end[end <= L]
+    if end.size:
+        diff -= np.bincount(end, minlength=L + 1)[:L + 1]
+    arr += np.cumsum(diff)[:L]
 
 
 def _itter_surv(beg, fin, agg, key):

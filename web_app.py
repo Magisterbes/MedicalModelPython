@@ -184,14 +184,18 @@ def api_sensitivity():
     years = int(data.get('years', 15))
     seed = data.get('seed', None)
     factors = data.get('factors', [0.5, 0.75, 1.0, 1.25, 1.5])
-    
+    n_jobs = data.get('n_jobs', None)  # None = auto (parallel only for heavy runs)
+    if n_jobs is not None:
+        n_jobs = int(n_jobs)
+
     def run_sens():
         global _sim_running
         try:
             from model.sensitivity import run_sensitivity_analysis
             result = run_sensitivity_analysis(
                 param_source=data.get('config', 'config/parameters.toml'),
-                seed=seed, population=population, years=years, factors=factors)
+                seed=seed, population=population, years=years, factors=factors,
+                n_jobs=n_jobs)
             global _sensitivity_result
             _sensitivity_result = result
         except Exception as e:

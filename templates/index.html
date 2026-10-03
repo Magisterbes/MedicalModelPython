@@ -46,7 +46,18 @@
         .status { font-size: 0.85em; color: #888; margin-left: 15px; }
         .param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
         .param-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
-        .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px; }
+        .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px;
+                          display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+        .hint { position: relative; display: inline-flex; align-items: center; justify-content: center;
+                width: 15px; height: 15px; border-radius: 50%; background: #e0e4f5; color: #1a237e;
+                font-size: 0.72em; font-weight: 700; cursor: help; flex: 0 0 auto; user-select: none; }
+        .hint::after { content: attr(data-hint); position: absolute; right: 0; top: 150%;
+                width: 230px; background: #1a237e; color: #fff; padding: 8px 10px; border-radius: 6px;
+                font-size: 0.78rem; font-weight: 400; line-height: 1.35; text-align: left;
+                opacity: 0; visibility: hidden; transition: opacity 0.15s; z-index: 60;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.25); pointer-events: none; }
+        .hint:hover::after, .hint:focus::after { opacity: 1; visibility: visible; }
+        .hint:focus { outline: 2px solid #1a237e; outline-offset: 1px; }
         .param-row { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
         .param-row label { font-weight: 400; font-size: 0.82em; color: #555; flex: 1; }
         .btn-small { padding: 4px 12px; font-size: 0.78em; }
@@ -123,6 +134,19 @@
 <script>
 let pollingInterval = null;
 
+function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+// Round a number to at most 5 decimals, dropping trailing zeros (85 -> 85, 0.75900 -> 0.759)
+function fmt5(v){
+    const n = parseFloat(v);
+    if(!isFinite(n)) return String(v ?? '');
+    let s = n.toFixed(5);
+    if(s.indexOf('.') >= 0) s = s.replace(/0+$/,'').replace(/\.$/,'');
+    if(s === '-0') s = '0';
+    return s;
+}
+function fmtArr(a){ return (a||[]).map(fmt5).join(', '); }
+function hintIcon(d){ return `<span class="hint" data-hint="${escAttr(d)}" aria-label="${escAttr(d)}" role="img" tabindex="0">i</span>`; }
+
 function toggleParams(){ 
     const c = document.getElementById('params-content');
     c.classList.toggle('collapsed');
@@ -195,11 +219,11 @@ function renderCharts(stats){
 // --- Parameters ---
 function loadParamsFromServer(){
     const grid = document.getElementById('params-grid');
-    let html = `<div class="param-group"><h4>Data Files</h4>
+    let html = `<div class="param-group"><h4>Data Files ${hintIcon('Input datasets for initialisation and calibration. Aggregate data provides age-specific population, case and death counts; staging data provides individual patient records used to fit the stage and aggressiveness (Gompertz) models.')}</h4>
         <div class="param-row"><label>Aggregate data</label><select id="data_aggregate_select" onchange="selectDataFile('data_aggregate')" style="width:180px"><option value="">loading...</option></select></div>
         <div class="param-row"><label>Staging data</label><select id="data_staging_select" onchange="selectDataFile('data_staging')" style="width:180px"><option value="">loading...</option></select></div>
     </div>
-    <div class="param-group"><h4>Upload CSV</h4>
+    <div class="param-group"><h4>Upload CSV ${hintIcon('Upload a new aggregate or staging CSV. Files are validated (required columns, numeric and non-negative values, age 0-110) and saved in the data folder, then selectable above.')}</h4>
         <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
             <input type="file" accept=".csv" id="data_upload_input" style="font-size:0.78em;padding:4px 6px;width:160px">
             <select id="upload_type" style="width:85px;font-size:0.7em;padding:4px"><option value="aggregate">Aggr</option><option value="staging">Stage</option></select>
@@ -210,16 +234,16 @@ function loadParamsFromServer(){
     fetch('/api/parameters').then(r=>r.json()).then(data=>{
         if(data.error){ grid.innerHTML = html + '<div class="param-group"><p style="color:#888;font-size:0.85em">Run Fit+Simulate to see calibrated parameters</p></div>'; return; }
         const groups=[
-            {n:'Diagnose Hazard',f:[{id:'diagnose_hazard_constants',l:'Piecewise betas (6)',v:(data.diagnose_hazard_constants||[]).join(',')}]},
-            {n:'Cancer Death',f:[{id:'cancer_death_hazard_lambda',l:'Log-hazard lambda',v:data.cancer_death_hazard_lambda}]},
-            {n:'Treatment',f:[{id:'treatment_efficiency',l:'Efficiency (4 stages)',v:(data.treatment_efficiency||[]).join(',')},{id:'age_cure_constants',l:'Age cure multipliers (5)',v:(data.age_cure_constants||[]).join(',')}]},
-            {n:'Lead Time',f:[{id:'lead_time_means',l:'Lead time means (4)',v:(data.lead_time_means||[]).join(',')}]},
-            {n:'Screening',f:[{id:'participation_rate',l:'Participation rate',v:data.participation_rate},{id:'screening_start_age',l:'Start age',v:data.screening_start_age},{id:'screening_finish_age',l:'Finish age',v:data.screening_finish_age},{id:'screening_frequency',l:'Frequency',v:data.screening_frequency}]},
-            {n:'Gompertz Aggressive',f:[{id:'gompertz_aggressive',l:'K,C,B_pop,B_std',v:(data.gompertz_aggressive||[]).join(',')}]},
-            {n:'Gompertz Non-Aggressive',f:[{id:'gompertz_non_aggressive',l:'K,C,B_pop,B_std',v:(data.gompertz_non_aggressive||[]).join(',')}]},
-            {n:'Other',f:[{id:'growth_rate_limits',l:'Growth rate limits (2)',v:(data.growth_rate_limits||[]).join(',')},{id:'aggressiveness_threshold',l:'Aggressiveness threshold',v:data.aggressiveness_threshold},{id:'reoccurrence_prob',l:'Reoccurrence prob',v:data.reoccurrence_prob}]},
+            {n:'Diagnose Hazard',d:'Piecewise-constant hazard of clinical diagnosis (6 betas = log-hazard per age interval). Controls how fast a growing preclinical cancer becomes clinically detected; fitted to aggregate incidence.',f:[{id:'diagnose_hazard_constants',l:'Piecewise betas (6)',v:fmtArr(data.diagnose_hazard_constants)}]},
+            {n:'Cancer Death',d:'Log-hazard lambda of the exponential cancer-death hazard (rate = exp(lambda) per year after diagnosis). Governs cancer-specific survival; fitted to aggregate mortality.',f:[{id:'cancer_death_hazard_lambda',l:'Log-hazard lambda',v:fmt5(data.cancer_death_hazard_lambda)}]},
+            {n:'Treatment',d:'Treatment effect parameters: per-stage efficiency (fraction of the hazard removed by treatment) and age-dependent cure multipliers.',f:[{id:'treatment_efficiency',l:'Efficiency (4 stages)',v:fmtArr(data.treatment_efficiency)},{id:'age_cure_constants',l:'Age cure multipliers (5)',v:fmtArr(data.age_cure_constants)}]},
+            {n:'Lead Time',d:'Mean sojourn (lead) time in each of the 4 stages before clinical diagnosis, in years (exponential means). These parameters are not identifiable from data alone and are explored in the sensitivity analysis.',f:[{id:'lead_time_means',l:'Lead time means (4)',v:fmtArr(data.lead_time_means)}]},
+            {n:'Screening',d:'Screening programme settings: participation rate, age window (start and finish) and frequency in years between rounds.',f:[{id:'participation_rate',l:'Participation rate',v:fmt5(data.participation_rate)},{id:'screening_start_age',l:'Start age',v:fmt5(data.screening_start_age)},{id:'screening_finish_age',l:'Finish age',v:fmt5(data.screening_finish_age)},{id:'screening_frequency',l:'Frequency',v:fmt5(data.screening_frequency)}]},
+            {n:'Gompertz Aggressive',d:'Gompertz tumour-growth parameters for aggressive cancers (K, C, B_pop). Tumour size V(t) = exp(K - exp(C - B_pop*t)), fitted to stage and lead-time data.',f:[{id:'gompertz_aggressive',l:'K,C,B_pop,B_std',v:fmtArr(data.gompertz_aggressive)}]},
+            {n:'Gompertz Non-Aggressive',d:'Gompertz tumour-growth parameters for non-aggressive cancers (K, C, B_pop), fitted separately from the aggressive group.',f:[{id:'gompertz_non_aggressive',l:'K,C,B_pop,B_std',v:fmtArr(data.gompertz_non_aggressive)}]},
+            {n:'Other',d:'Miscellaneous parameters: growth-rate limits (min and max tumour growth), aggressiveness threshold (rate above which a cancer is aggressive), and reoccurrence probability after cure.',f:[{id:'growth_rate_limits',l:'Growth rate limits (2)',v:fmtArr(data.growth_rate_limits)},{id:'aggressiveness_threshold',l:'Aggressiveness threshold',v:fmt5(data.aggressiveness_threshold)},{id:'reoccurrence_prob',l:'Reoccurrence prob',v:fmt5(data.reoccurrence_prob)}]},
         ];
-        html += groups.map(g=>`<div class="param-group"><h4>${g.n}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
+        html += groups.map(g=>`<div class="param-group"><h4>${g.n}${g.d?hintIcon(g.d):''}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
         grid.innerHTML = html;
     });
 }

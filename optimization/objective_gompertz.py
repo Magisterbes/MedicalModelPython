@@ -59,10 +59,13 @@ def neg_log_likelihood_gompertz(
     """
     K, C, B_pop = params[0], params[1], params[2]
     sigma = 0.8  # Bandwidth for stage probability smoothing
+    two_sigma_sq = 2.0 * sigma * sigma
     
+    lead_times = np.asarray(lead_times, dtype=np.float64)
+    stages = np.asarray(stages)
     n = len(lead_times)
     
-    # Compute V(t) for all observations
+    # Compute V(t) for all observations (vectorized)
     # V(t) = exp(K - exp(C - B_pop * t))
     V = np.exp(K - np.exp(C - B_pop * lead_times))
     
@@ -70,24 +73,25 @@ def neg_log_likelihood_gompertz(
     V0 = np.exp(K - np.exp(C))
     penalty = (V0 - initial_V0) ** 2 * 1.0  # Weight can be adjusted
     
-    # Cross-entropy: for each observation, compute softmax probabilities
-    # over stages {1, 2, 3, 4} based on distance from V
+    # Cross-entropy: for each observation, softmax probabilities
+    # over stages {1, 2, 3, 4} based on squared distance from V.
+    # Fully vectorized over observations -> shape (n, 4).
     stage_targets = np.array([1.0, 2.0, 3.0, 4.0])
+    dist_sq = (V[:, None] - stage_targets[None, :]) ** 2
+    logits = -dist_sq / two_sigma_sq
     
-    ll = 0.0
-    for i in range(n):
-        dist_sq = (V[i] - stage_targets) ** 2
-        logits = -dist_sq / (2.0 * sigma ** 2)
-        # Softmax with max trick for numerical stability
-        logits_max = np.max(logits)
-        probs = np.exp(logits - logits_max)
-        probs = probs / probs.sum()
-        
-        s_idx = int(stages[i]) - 1
-        if 0 <= s_idx < 4 and probs[s_idx] > 1e-300:
-            ll += np.log(probs[s_idx])
-        else:
-            ll += np.log(1e-300)  # Floor for numerical safety
+    # Softmax with max trick for numerical stability (per-row max)
+    logits_max = logits.max(axis=1, keepdims=True)
+    probs = np.exp(logits - logits_max)
+    probs = probs / probs.sum(axis=1, keepdims=True)
+    
+    # Gather probability of the observed stage, with floor for safety
+    s_idx = stages.astype(np.intp) - 1
+    valid = (s_idx >= 0) & (s_idx < 4)
+    safe_idx = np.where(valid, s_idx, 0)
+    p_sel = probs[np.arange(n), safe_idx]
+    p_sel = np.where(valid & (p_sel > 1e-300), p_sel, 1e-300)
+    ll = float(np.log(p_sel).sum())
     
     # Weighted sum: -LL + penalty
     # Normalize by n for scale

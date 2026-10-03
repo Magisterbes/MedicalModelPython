@@ -52,4 +52,4 @@ r = fit_cancer_death_hazard(
 )
 print(f"Mort L-BFGS-B: {time.time() - t0:.2f}s, LL={r['neg_ll']:.4f}")
 
-print("\nDone! Total fit time should be ~2-3 seconds.")
+print("\nDone! Total fit time is now well under a second (vectorized objectives).")

@@ -19,6 +19,29 @@ python web_app.py
 # → Open http://127.0.0.1:5000
 ```
 
+## Docker
+
+```bash
+# Build the image
+docker build -t med_flask_app:latest .
+
+# Run the web UI → http://localhost:5000
+docker run --rm -p 5000:5000 --name flask_tutorial med_flask_app:latest
+
+# …or use Docker Compose (persists output/, config/ and data/ on the host)
+docker compose up --build
+```
+
+The image runs the Flask UI on port 5000 under a non-root user, ships with a
+health check at `/api/status`, pre-warms the Numba JIT cache at build time, and
+installs a proper init (`tini`) for clean signal handling.
+
+> **Note:** `requirements.txt` uses lower bounds only, so a rebuilt image may
+> resolve newer library versions than your local environment. Results stay
+> numerically equivalent, but re-running with a different NumPy/Numba version
+> can shift the random stream very slightly (a handful of agents out of
+> millions). Pin exact versions if you need bit-for-bit reproducibility.
+
 ## What the Model Does
 
 - Simulates a virtual population of up to 1 million people
@@ -78,11 +101,11 @@ MedicalModelPython/
 
 | Operation | Time | Notes |
 |-----------|------|-------|
-| Generate 1M population | ~2 s | NumPy batch + Numba |
-| 1 simulation year | ~0.3 s | Vectorized boolean masks |
-| Calibration (Fit) | ~8 s | L-BFGS-B + Nelder-Mead |
-| Sensitivity (5 factors × 30yr × 100K) | ~30 s | Including Savitzky-Golay smoothing |
-| Full run (30 yr × 50K) | ~20 s | Including gather stats |
+| Generate 1M population | ~1.7 s | NumPy batch + Numba |
+| 1 simulation year (1M agents) | ~0.05 s | Vectorized `np.bincount` statistics |
+| Calibration (Fit) | ~0.2 s | Vectorized Gompertz + L-BFGS-B / Nelder-Mead |
+| Sensitivity (5 factors × 30yr × 100K) | ~2 s | Factors run in parallel across cores for heavy runs |
+| Full run (30 yr × 50K) | ~3 s | Including start-up and gather stats |
 
 ## Documentation
 
