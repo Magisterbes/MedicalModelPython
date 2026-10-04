@@ -147,6 +147,21 @@
 
 <script>
 let pollingInterval = null;
+// The id of the run THIS browser tab started. The server hands one out per run,
+// so a tab can tell its own status/results/downloads apart from another
+// visitor's — everything below is filtered on it. Kept in sessionStorage so a
+// reload during a run does not lose the tab's claim on its own results.
+let currentRunId = null;
+try { currentRunId = sessionStorage.getItem('mm_run_id') || null; } catch(e) {}
+function setRunId(id){
+    currentRunId = (id===undefined||id===null||id==='')?null:String(id);
+    try {
+        if(currentRunId) sessionStorage.setItem('mm_run_id', currentRunId);
+        else sessionStorage.removeItem('mm_run_id');
+    } catch(e) {}
+}
+// True only when the server's current run is the one this tab started.
+function isMyRun(id){ return !!currentRunId && id === currentRunId; }
 
 function escAttr(s){ return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 // Round a number to at most 5 decimals, dropping trailing zeros (85 -> 85, 0.75900 -> 0.759)
@@ -178,6 +193,7 @@ function startRun(params){
     fetch('/api/simulate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(params) })
         .then(r=>r.json()).then(data=>{
             if(data.error){ setStatus('Error: '+data.error, false); setButtons(true); return; }
+            if(data.run_id) setRunId(data.run_id);
             pollingInterval = setInterval(pollStatus, 500);
         }).catch(err=>{ setStatus('Connection error', false); setButtons(true); });
 }
@@ -185,6 +201,13 @@ function startRun(params){
 function pollStatus(){
     fetch('/api/status').then(r=>r.json()).then(data=>{
         document.getElementById('progress-fill').style.width = data.progress + '%';
+        if(!isMyRun(data.run_id)){
+            // Someone else holds the single simulation slot on this instance.
+            setStatus('Another visitor is using this instance — your own results will '
+                      + 'appear when you start a run.', true);
+            if(!data.running){ clearInterval(pollingInterval); setButtons(true); }
+            return;
+        }
         setStatus(data.running ? `Simulating... ${data.progress}%` : 'Ready', data.running);
         if(!data.running && data.has_results){ clearInterval(pollingInterval); loadResults(); setButtons(true); }
     });
@@ -193,6 +216,10 @@ function pollStatus(){
 function loadResults(){
     fetch('/api/results').then(r=>r.json()).then(data=>{
         if(data.error){ setStatus('Error: '+data.error, false); return; }
+        if(!isMyRun(data.run_id)){
+            setStatus("Those results belong to another visitor's run — start your own to see them.", false);
+            return;
+        }
         showSummary(data.summary);
         renderCharts(data.stats);
         loadDownloads();
@@ -210,16 +237,21 @@ function loadDownloads(){
     fetch('/api/downloads').then(r=>r.json()).then(d=>{
         const sec=document.getElementById('downloads-section');
         const list=document.getElementById('downloads-list');
-        if(!d||!d.ready||!d.files||!d.files.length){ if(sec)sec.style.display='none'; return; }
+        // Downloads are scoped to the run id — both here and in the URL, where
+        // the server rejects a link carrying someone else's run id.
+        if(!d||!isMyRun(d.run_id)||!d.ready||!d.files||!d.files.length){
+            if(sec)sec.style.display='none'; return;
+        }
+        const base='/api/download/'+encodeURIComponent(d.run_id)+'/';
         sec.style.display='block';
         list.innerHTML=d.files.map(f=>
             '<div class="param-row"><label>'+f.name+
             '<div class="status" style="margin-left:0">'+f.description+' · '+fmtSize(f.size)+'</div></label>'+
-            '<a class="btn btn-secondary btn-small" href="/api/download/'+encodeURIComponent(f.name)+'">Download</a></div>'
+            '<a class="btn btn-secondary btn-small" href="'+base+encodeURIComponent(f.name)+'">Download</a></div>'
         ).join('');
         const note=document.getElementById('downloads-note');
         if(note)note.textContent=d.files.length+' file(s) · '+fmtSize(d.total_bytes)+
-            ' total · only the latest run is kept on disk';
+            ' total · your run '+d.run_id.slice(0,8)+' · only the newest runs are kept on disk';
     }).catch(()=>{});
 }
 
@@ -424,18 +456,28 @@ function runSensitivity(){
         body:JSON.stringify({population:Math.max(Math.min(pop,300000),50000),years:30,seed:getSeed(),factors:[0.5,0.75,1.0,1.25,1.5]})})
         .then(r=>r.json()).then(data=>{
             if(data.error){setStatus('Error: '+data.error,false);setButtons(true);return;}
+            if(data.run_id) setRunId(data.run_id);
             pollingInterval=setInterval(pollSensitivity,1000);
         }).catch(err=>{setStatus('Connection error',false);setButtons(true);});
 }
 function pollSensitivity(){
     fetch('/api/status').then(r=>r.json()).then(d=>{
         document.getElementById('progress-fill').style.width=(20+70*(d.progress/100))+'%';
+        if(!isMyRun(d.run_id)){
+            if(!d.running){clearInterval(pollingInterval);setButtons(true);}
+            setStatus("Another visitor's run has the instance now — start your own.",false);
+            return;
+        }
         if(!d.running){clearInterval(pollingInterval);loadSensitivityResults();setButtons(true);}
     });
 }
 function loadSensitivityResults(){
     fetch('/api/sensitivity/result').then(r=>r.json()).then(data=>{
         if(data.error){setStatus('Error: '+data.error,false);return;}
+        if(!isMyRun(data.run_id)){
+            setStatus("Those sensitivity results belong to another visitor's run.",false);
+            return;
+        }
         setStatus('Sensitivity done in '+(data.runtime_sec||0).toFixed(1)+'s. Rendering charts...',false);
         drawSensitivity(data);
         loadDownloads();
@@ -530,6 +572,18 @@ function setStatus(msg,showProgress){
     document.getElementById('status-text').textContent=msg;
     if(showProgress)document.getElementById('progress-bar').style.display='block';
     else setTimeout(()=>document.getElementById('progress-bar').style.display='none',2000);
+}
+
+// If the page was reloaded while this tab's own run was still going, resume
+// watching it; if it already finished, bring the results back. Guarded by the
+// run id, so another visitor's run is never picked up.
+if(currentRunId){
+    fetch('/api/status').then(r=>r.json()).then(d=>{
+        if(!isMyRun(d.run_id)) return;
+        if(d.running){ setButtons(false); pollingInterval=setInterval(pollStatus,500); }
+        else if(d.has_results){ loadResults(); }
+        else { loadDownloads(); }
+    }).catch(()=>{});
 }
 </script>
 </body>

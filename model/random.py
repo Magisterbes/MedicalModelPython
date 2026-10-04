@@ -3,9 +3,17 @@
 Replaces C# Tech.Rnd. Seeds are logged for reproducibility.
 Only `next_double()` and `next_doubles(n)` are used outside numba.
 Numba functions use their own simple LCG (`_uniform` in population.py).
+
+The state is **thread-local**. The web app serves concurrent runs from separate
+threads, and a module-level singleton let one run re-seed the stream another run
+was drawing from — silently breaking reproducibility. Every drawing site is
+preceded by `set_random(...)` in the same thread (`Simulation.__init__` and
+`Simulation.from_params`), so a seeded run yields exactly the same numbers as
+before.
 """
 
 from typing import Optional
+import threading
 import numpy as np
 
 
@@ -29,16 +37,20 @@ class RandomState:
         return self.rng.uniform(0.0, 1.0, size=n)
 
 
-_global_random: Optional[RandomState] = None
+# One RandomState per thread: concurrent runs in the same process no longer share
+# (and re-seed) a single stream.
+_local = threading.local()
 
 
 def get_random() -> RandomState:
-    global _global_random
-    if _global_random is None:
-        _global_random = RandomState()
-    return _global_random
+    """Random state of the *current thread*, created on first use."""
+    rng = getattr(_local, 'random', None)
+    if rng is None:
+        rng = RandomState()
+        _local.random = rng
+    return rng
 
 
-def set_random(seed: int):
-    global _global_random
-    _global_random = RandomState(seed)
+def set_random(seed: int) -> None:
+    """(Re)seed the current thread's random state."""
+    _local.random = RandomState(seed)

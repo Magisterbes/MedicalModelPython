@@ -1,9 +1,10 @@
 """Flask web UI for MedicalModel2024 microsimulation."""
-import json, logging, os, sys, threading, numpy as np
+import json, logging, os, shutil, sys, threading, uuid, numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from flask import Flask, render_template, request, jsonify, send_file
+from werkzeug.utils import secure_filename
 from model.simulation import Simulation
 from model.random import get_random
 
@@ -20,21 +21,84 @@ _sim_thread = None
 _sim_result = None
 _sim_running = False
 _sim_progress = 0
-_params_edit_cache = None  # Store edited params in-memory
+
+# Concurrency guard. The idle->busy transition happens under this lock: checking
+# `_sim_running` and setting it ~20 lines later let two simultaneous requests both
+# start a simulation, which is how a long run gets killed by the OOM reaper.
+_run_lock = threading.Lock()
+_run_id = None        # id of the current (or most recent) run
+_run_kind = None      # 'single' | 'sensitivity'
 
 FITTED_PARAMS_FILE = "config/params_fitted.json"
+PARAMS_DIR = "config"
 DATA_DIR = "data"
 ALLOWED_EXTENSIONS = {'csv'}
 
 # Reduced Gompertz model V(t) = exp(K - exp(C - B*t)) with B = exp(log(B_pop) + eps)
 GOMPERTZ_KEYS = ('K', 'C', 'B_pop', 'B_std')
 
-# Generated download bundle. Rewritten on every run so only the latest one is kept
-# on disk; nothing large is held in memory (the files are streamed).
-EXPORT_DIR = os.environ.get('EXPORT_DIR', 'output/exports')
+# Download bundles live in one directory per run: output/exports/<run_id>/. A
+# single shared directory meant one run's prepare_export_dir() (an rmtree) could
+# delete another run's files mid-download, and each session's download links
+# resolved to whoever ran last. Only the newest runs are kept on disk; nothing
+# large is held in memory (the files are streamed).
+EXPORT_ROOT = os.environ.get('EXPORT_DIR', 'output/exports')
+EXPORT_DIRS_KEPT = int(os.environ.get('EXPORT_DIRS_KEPT', 3))
 _exports: list = []
 
 import pandas as pd
+
+# --- Run slot and per-run state -------------------------------------------------
+
+def _try_acquire_run(kind: str) -> bool:
+    """Atomically claim the single simulation slot.
+
+    Returns False when another run holds it. The check and the flag update happen
+    under one lock, so two requests arriving together can no longer both proceed.
+    """
+    global _sim_running, _run_id, _run_kind
+    with _run_lock:
+        if _sim_running:
+            return False
+        _sim_running = True
+        _run_id = uuid.uuid4().hex
+        _run_kind = kind
+    logger.info("Run %s (%s) acquired the simulation slot", _run_id, kind)
+    return True
+
+
+def _release_run() -> None:
+    """Free the simulation slot."""
+    global _sim_running
+    with _run_lock:
+        _sim_running = False
+
+
+def _current_export_dir() -> str:
+    """Directory holding the download bundle of the current run."""
+    return os.path.join(EXPORT_ROOT, _run_id or 'idle')
+
+
+def _prune_export_dirs(keep: int = None) -> None:
+    """Keep only the newest `keep` per-run export directories.
+
+    Called right after a slot is acquired and before the new directory exists,
+    so the current run can never prune itself.
+    """
+    keep = EXPORT_DIRS_KEPT if keep is None else keep
+    try:
+        candidates = []
+        for name in os.listdir(EXPORT_ROOT):
+            path = os.path.join(EXPORT_ROOT, name)
+            if os.path.isdir(path):
+                candidates.append((path, os.path.getmtime(path)))
+    except OSError:
+        return
+    candidates.sort(key=lambda item: item[1], reverse=True)
+    for path, _ in candidates[keep:]:
+        shutil.rmtree(path, ignore_errors=True)
+        logger.info("Pruned old export directory: %s", path)
+
 
 # Human-readable descriptions shown next to each download link
 _FILE_DESCRIPTIONS = {
@@ -60,11 +124,11 @@ _FILE_DESCRIPTIONS = {
 }
 
 
-def _manifest(names):
+def _manifest(names, export_dir):
     """Build the download list from files that actually exist on disk."""
     files = []
     for name in names:
-        path = os.path.join(EXPORT_DIR, name)
+        path = os.path.join(export_dir, name)
         if not os.path.exists(path):
             continue
         description = _FILE_DESCRIPTIONS.get(name)
@@ -76,43 +140,45 @@ def _manifest(names):
     return files
 
 
-def _export_single_run(sim):
+def _export_single_run(sim, export_dir):
     """Stream the single-run download bundle to disk and return its manifest."""
     from model import export
-    export.prepare_export_dir(EXPORT_DIR)
+    export.prepare_export_dir(export_dir)
     names = ['agents.csv', 'agents_cancer.csv']
     export.write_agents_csv(sim.population, sim.current_date,
-                            os.path.join(EXPORT_DIR, 'agents.csv'))
+                            os.path.join(export_dir, 'agents.csv'))
     export.write_agents_csv(sim.population, sim.current_date,
-                            os.path.join(EXPORT_DIR, 'agents_cancer.csv'), cancer_only=True)
-    names += export.write_charts_csv(sim.stats.agg_stats, EXPORT_DIR)
-    names.append(export.write_summary_csv(sim.get_summary(), EXPORT_DIR))
-    export.write_meta(EXPORT_DIR, {
+                            os.path.join(export_dir, 'agents_cancer.csv'), cancer_only=True)
+    names += export.write_charts_csv(sim.stats.agg_stats, export_dir)
+    names.append(export.write_summary_csv(sim.get_summary(), export_dir))
+    export.write_meta(export_dir, {
         'kind': 'single_run',
+        'run_id': _run_id,
         'population': int(sim.params.init_population),
         'years': int(sim.params.years_to_simulate),
         'seed': get_random().seed,
     })
     names.append('meta.json')
-    return _manifest(names)
+    return _manifest(names, export_dir)
 
 
-def _export_sensitivity_result(result):
+def _export_sensitivity_result(result, export_dir):
     """Collect the sensitivity bundle (agent files were written by the jobs)."""
     from model import export
-    names = export.write_sensitivity_charts_csv(result, EXPORT_DIR)
-    metrics_file = export.write_sensitivity_metrics_csv(result, EXPORT_DIR)
+    names = export.write_sensitivity_charts_csv(result, export_dir)
+    metrics_file = export.write_sensitivity_metrics_csv(result, export_dir)
     if metrics_file:
         names.append(metrics_file)
     for factor in result.get('factors', []):
         names.append('agents_factor_%g.csv' % float(factor))
-    export.write_meta(EXPORT_DIR, {
+    export.write_meta(export_dir, {
         'kind': 'sensitivity',
+        'run_id': _run_id,
         'factors': result.get('factors'),
         'runtime_sec': result.get('runtime_sec'),
     })
     names.append('meta.json')
-    return _manifest(names)
+    return _manifest(names, export_dir)
 
 
 def _validate_aggregate_csv(filepath: str) -> tuple[bool, str]:
@@ -168,22 +234,35 @@ def index():
 
 @app.route('/api/simulate', methods=['POST'])
 def api_simulate():
-    global _sim_thread, _sim_running, _sim_result, _sim_instance, _sim_progress
-    if _sim_running:
-        return jsonify({'error': 'Simulation already running'}), 409
-    data = request.get_json() or {}
-    config = data.get('config', 'config/parameters.toml')
-    seed = data.get('seed', None)
-    population = data.get('population', None)
-    do_fit = data.get('fit', False)
-    override_params = data.get('override_params', None)
+    global _sim_thread, _sim_result, _sim_instance, _sim_progress, _exports
+    # Claim the slot before anything else: the old check-then-set left a window
+    # (parsing, and the setup work below) in which two requests arriving together
+    # both started a simulation.
+    if not _try_acquire_run('single'):
+        return jsonify({'error': 'Another simulation is already running on this '
+                                 'instance. Wait for it to finish, then try again.',
+                        'run_id': _run_id, 'kind': _run_kind}), 409
+
+    try:
+        data = request.get_json() or {}
+        config = data.get('config', 'config/parameters.toml')
+        seed = data.get('seed', None)
+        population = data.get('population', None)
+        do_fit = data.get('fit', False)
+        override_params = data.get('override_params', None)
+    except (TypeError, ValueError) as exc:
+        _release_run()
+        return jsonify({'error': f'Invalid request: {exc}'}), 400
+
+    run_id = _run_id
+    export_dir = _current_export_dir()
+    _prune_export_dirs()
     
-    _sim_running = True
     _sim_progress = 0
     _sim_result = None
     
     def run_sim():
-        global _sim_instance, _sim_result, _sim_progress, _sim_running, _exports
+        global _sim_instance, _sim_result, _sim_progress, _exports
         try:
             _sim_instance = Simulation(param_source=config, seed=seed)
             p = _sim_instance.params
@@ -205,13 +284,14 @@ def api_simulate():
             _sim_progress = 92
             _sim_instance.stats.gather_stats(_sim_instance.population, p, _sim_instance.current_date)
             _sim_progress = 98
-            _sim_result = {'summary': _sim_instance.get_summary(),
+            _sim_result = {'run_id': run_id,
+                           'summary': _sim_instance.get_summary(),
                            'stats': _sim_instance.stats.to_dict()}
             # Stream the download bundle to disk while the agent arrays are still
             # available, then release them (they are the bulk of the memory — a
             # 1M-agent run holds ~1.2 GB that nothing reads afterwards).
             try:
-                _exports = _export_single_run(_sim_instance)
+                _exports = _export_single_run(_sim_instance, export_dir)
             except Exception as exc:
                 logger.warning("Export failed: %s", exc)
                 _exports = []
@@ -219,39 +299,45 @@ def api_simulate():
             _sim_progress = 100
         except Exception as e:
             import traceback
-            _sim_result = {'error': f'{type(e).__name__}: {e}\n{traceback.format_exc()}'}
+            _sim_result = {'run_id': run_id,
+                           'error': f'{type(e).__name__}: {e}\n{traceback.format_exc()}'}
             _sim_progress = -1
         finally:
-            _sim_running = False
-    
+            _release_run()
+
     _sim_thread = threading.Thread(target=run_sim, daemon=True)
     _sim_thread.start()
-    return jsonify({'status': 'started'})
+    return jsonify({'status': 'started', 'run_id': run_id})
 
 @app.route('/api/status')
 def api_status():
     return jsonify({'running': _sim_running, 'progress': _sim_progress,
-                    'has_results': _sim_result is not None})
+                    'has_results': _sim_result is not None,
+                    'run_id': _run_id, 'kind': _run_kind})
 
 
 @app.route('/api/downloads')
 def api_downloads():
     """List the files generated by the latest run (agents history, chart CSVs)."""
     total = sum(f['size'] for f in _exports)
-    return jsonify({'files': _exports, 'ready': bool(_exports), 'total_bytes': total})
+    return jsonify({'files': _exports, 'ready': bool(_exports), 'total_bytes': total,
+                    'run_id': _run_id, 'kind': _run_kind})
 
 
-@app.route('/api/download/<path:name>')
-def api_download(name):
+@app.route('/api/download/<run_id>/<path:name>')
+def api_download(run_id, name):
     """Stream a generated file from disk.
 
-    Only files listed in the current manifest can be fetched, which also
-    prevents any path traversal.
+    The URL carries the id of the run that produced the file, so a session can
+    only ever fetch its own results — asking for another run's id is a 404. The
+    name must also appear in that run's manifest, which rules out traversal.
     """
+    if not run_id or run_id != _run_id:
+        return jsonify({'error': 'This download belongs to a different run'}), 404
     entry = next((f for f in _exports if f['name'] == name), None)
     if entry is None:
         return jsonify({'error': f'Unknown file: {name}'}), 404
-    path = os.path.join(EXPORT_DIR, entry['name'])
+    path = os.path.join(EXPORT_ROOT, run_id, entry['name'])
     if not os.path.exists(path):
         return jsonify({'error': 'File is no longer available'}), 404
     return send_file(path, as_attachment=True, download_name=entry['name'])
@@ -301,48 +387,60 @@ def api_parameters():
 @app.route('/api/sensitivity', methods=['POST'])
 def api_sensitivity():
     """Run lead time sensitivity analysis."""
-    global _sim_running, _exports
-    if _sim_running:
-        return jsonify({'error': 'Simulation already running'}), 409
-    _sim_running = True
-    data = request.get_json() or {}
-    population = int(data.get('population', 300000))
-    years = int(data.get('years', 15))
-    seed = data.get('seed', None)
-    factors = data.get('factors', [0.5, 0.75, 1.0, 1.25, 1.5])
+    global _exports
+    if not _try_acquire_run('sensitivity'):
+        return jsonify({'error': 'Another simulation is already running on this '
+                                 'instance. Wait for it to finish, then try again.',
+                        'run_id': _run_id, 'kind': _run_kind}), 409
+
+    try:
+        data = request.get_json() or {}
+        population = int(data.get('population', 300000))
+        years = int(data.get('years', 15))
+        seed = data.get('seed', None)
+        factors = data.get('factors', [0.5, 0.75, 1.0, 1.25, 1.5])
+    except (TypeError, ValueError) as exc:
+        _release_run()
+        return jsonify({'error': f'Invalid request: {exc}'}), 400
+
+    run_id = _run_id
+    export_dir = _current_export_dir()
+    _prune_export_dirs()
+
     n_jobs = data.get('n_jobs', None)  # None = auto (parallel only for heavy runs)
     if n_jobs is not None:
         n_jobs = int(n_jobs)
 
-    # Prepare the export directory before the jobs start, so the worker processes
-    # write into a clean folder (they add one file per factor).
+    # Prepare the run's export directory before the jobs start, so the worker
+    # processes write into a clean folder (they add one file per factor).
     try:
         from model import export as export_mod
-        export_mod.prepare_export_dir(EXPORT_DIR)
+        export_mod.prepare_export_dir(export_dir)
     except Exception as exc:
         logger.warning("Could not prepare the export directory: %s", exc)
     _exports = []
 
     def run_sens():
-        global _sim_running, _exports
+        global _exports
         try:
             from model.sensitivity import run_sensitivity_analysis
             result = run_sensitivity_analysis(
                 param_source=data.get('config', 'config/parameters.toml'),
                 seed=seed, population=population, years=years, factors=factors,
-                n_jobs=n_jobs, export_dir=EXPORT_DIR)
+                n_jobs=n_jobs, export_dir=export_dir)
             global _sensitivity_result
-            _sensitivity_result = result
+            _sensitivity_result = dict(result, run_id=run_id)
             try:
-                _exports = _export_sensitivity_result(result)
+                _exports = _export_sensitivity_result(result, export_dir)
             except Exception as exc:
                 logger.warning("Sensitivity export failed: %s", exc)
                 _exports = []
         except Exception as e:
             import traceback
-            _sensitivity_result = {'error': f'{type(e).__name__}: {e}'}
+            _sensitivity_result = {'run_id': run_id,
+                                   'error': f'{type(e).__name__}: {e}'}
         finally:
-            _sim_running = False
+            _release_run()
     
     _sensitivity_result = None
     import threading
@@ -355,6 +453,7 @@ def api_sensitivity_result():
     if _sensitivity_result is None:
         return jsonify({'error': 'No sensitivity results yet. Check /api/status for completion.'}), 404
     result = dict(_sensitivity_result)
+    result.setdefault('run_id', _run_id)
     # Convert numpy arrays in metrics to lists
     if 'metrics' in result:
         for k, v in result['metrics'].items():
@@ -450,33 +549,87 @@ def api_datasets():
     return jsonify(list_datasets())
 
 
+def _reserved_data_files() -> set:
+    """File names that belong to a shipped dataset.
+
+    Uploads are refused for these: one visitor overwriting
+    `globocan_colorectum_usa_agg.csv` would silently change the inputs of every
+    other visitor's run.
+    """
+    try:
+        with open(DATASETS_MANIFEST, encoding='utf-8') as handle:
+            manifest = json.load(handle)
+    except (OSError, ValueError):
+        return set()
+    names = set()
+    for entry in manifest.get('datasets', []):
+        for key in ('aggregate', 'staging'):
+            if entry.get(key):
+                names.add(str(entry[key]).lower())
+    return names
+
+
 @app.route('/api/data/upload', methods=['POST'])
 def api_data_upload():
-    """Upload and validate a CSV data file."""
+    """Upload and validate a CSV data file.
+
+    Two things matter for concurrent use. The name is sanitised and may not
+    shadow a shipped dataset, and validation runs on a temporary file that is
+    only moved into place on success — the old code saved first and then removed
+    the target on failure, so a bad upload could delete an existing file that
+    someone else was about to use.
+    """
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
     file = request.files['file']
-    if file.filename == '':
+    if not file.filename:
         return jsonify({'error': 'No file selected'}), 400
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+
+    # secure_filename() drops any directory part, so '../x.csv' or 'C:\\x.csv'
+    # cannot escape DATA_DIR.
+    safe_name = secure_filename(os.path.basename(file.filename.replace('\\', '/')))
+    if not safe_name:
+        return jsonify({'error': 'Invalid file name'}), 400
+    ext = safe_name.rsplit('.', 1)[-1].lower() if '.' in safe_name else ''
     if ext != 'csv':
         return jsonify({'error': f'Only .csv files allowed. Got: .{ext}'}), 400
-    
+    if safe_name.lower() in _reserved_data_files():
+        return jsonify({'error': f'"{safe_name}" is part of a shipped dataset and cannot '
+                                 f'be overwritten. Upload it under a different name.'}), 400
+
     data_type = request.form.get('type', 'aggregate')
-    filepath = os.path.join(DATA_DIR, file.filename)
     os.makedirs(DATA_DIR, exist_ok=True)
-    file.save(filepath)
-    
-    # Validate
-    if data_type == 'aggregate':
-        ok, msg = _validate_aggregate_csv(filepath)
-    else:
-        ok, msg = _validate_staging_csv(filepath)
-    if not ok:
-        os.remove(filepath)  # Delete invalid file
-        return jsonify({'error': msg}), 400
-    
-    return jsonify({'status': 'ok', 'filename': file.filename, 'validation': msg})
+    final_path = os.path.join(DATA_DIR, safe_name)
+    tmp_path = final_path + '.uploading'
+    file.save(tmp_path)
+
+    try:
+        if data_type == 'aggregate':
+            ok, msg = _validate_aggregate_csv(tmp_path)
+        else:
+            ok, msg = _validate_staging_csv(tmp_path)
+        if not ok:
+            return jsonify({'error': msg}), 400
+        # Atomic: a concurrent reader sees either the old file or the new one.
+        os.replace(tmp_path, final_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)  # only ever our own temporary file
+
+    return jsonify({'status': 'ok', 'filename': safe_name, 'validation': msg})
+
+def _resolve_params_path(raw) -> str:
+    """Constrain a client-supplied parameter path to config/<name>.json.
+
+    The endpoints used to open() whatever path the request carried, which allowed
+    writing an arbitrary file inside the container. Only a plain file name is
+    honoured now, and it always resolves inside config/.
+    """
+    name = os.path.basename(str(raw or '').replace('\\', '/')).strip()
+    if not name or not name.lower().endswith('.json'):
+        raise ValueError('Path must be a plain .json file name, e.g. params_fitted.json')
+    return os.path.join(PARAMS_DIR, name)
+
 
 @app.route('/api/parameters/save', methods=['POST'])
 def api_save_params():
@@ -484,7 +637,11 @@ def api_save_params():
     p = _sim_instance.params if _sim_instance else None
     if p is None:
         return jsonify({'error': 'No simulation initialized'}), 404
-    save_path = request.get_json().get('path', FITTED_PARAMS_FILE) if request.get_json() else FITTED_PARAMS_FILE
+    body = request.get_json(silent=True) or {}
+    try:
+        save_path = _resolve_params_path(body.get('path', FITTED_PARAMS_FILE))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     data = {
         'diagnose_hazard_constants': p.diagnose_hazard.constants.tolist(),
         'cancer_death_hazard_lambda': float(p.cancer_death_hazard.constants[0]),
@@ -503,6 +660,7 @@ def api_save_params():
         'screening_finish': p.finish_age,
         'screening_frequency': p.frequency,
     }
+    os.makedirs(PARAMS_DIR, exist_ok=True)
     with open(save_path, 'w') as f:
         json.dump(data, f, indent=2, cls=NumpyEncoder)
     return jsonify({'status': 'ok', 'path': save_path})
@@ -513,7 +671,11 @@ def api_load_params():
     p = _sim_instance.params if _sim_instance else None
     if p is None:
         return jsonify({'error': 'No simulation initialized — run simulation first'}), 404
-    load_path = request.get_json().get('path', FITTED_PARAMS_FILE) if request.get_json() else FITTED_PARAMS_FILE
+    body = request.get_json(silent=True) or {}
+    try:
+        load_path = _resolve_params_path(body.get('path', FITTED_PARAMS_FILE))
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     if not os.path.exists(load_path):
         return jsonify({'error': f'File not found: {load_path}'}), 404
     with open(load_path) as f:
