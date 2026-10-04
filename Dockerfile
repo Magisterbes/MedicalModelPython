@@ -60,11 +60,13 @@ EXPOSE 5000
 
 # --- Health check -------------------------------------------------------------
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-    CMD python -c "import urllib.request, sys; \
-sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/api/status', timeout=3).status == 200 else 1)"
+    CMD python -c "import os, urllib.request, sys; \
+p = os.environ.get('PORT', '5000'); \
+sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:' + p + '/api/status', timeout=3).status == 200 else 1)"
 
 # --- Entry point --------------------------------------------------------------
 # The web app keeps run state in module-level globals, so it must run as a
-# single process (no multi-worker WSGI server).
+# single process (no multi-worker WSGI server). Hosting platforms inject the
+# port to bind via $PORT (Render defaults to 10000), hence the shell form.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["python", "web_app.py", "--host", "0.0.0.0", "--port", "5000"]
+CMD ["sh", "-c", "python web_app.py --host 0.0.0.0 --port ${PORT:-5000}"]

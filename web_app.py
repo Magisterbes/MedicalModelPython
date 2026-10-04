@@ -232,6 +232,12 @@ def _validate_staging_csv(filepath: str) -> tuple[bool, str]:
 def index():
     return render_template('index.html')
 
+
+@app.route('/guide')
+def guide():
+    """Static reference page: data formats and a getting-started walkthrough."""
+    return render_template('guide.html')
+
 @app.route('/api/simulate', methods=['POST'])
 def api_simulate():
     global _sim_thread, _sim_result, _sim_instance, _sim_progress, _exports
@@ -754,7 +760,8 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='127.0.0.1')
-    parser.add_argument('--port', type=int, default=5000)
+    # Hosting platforms (Render, Heroku, ...) inject the port to bind via $PORT.
+    parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', '5000')))
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args()
     print(f"MedicalModel2024 at http://{args.host}:{args.port}")

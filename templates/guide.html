@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data format &amp; getting started — Cancer Screening Microsimulation</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               background: #f0f2f5; color: #333; line-height: 1.55; }
+        .header { background: linear-gradient(135deg, #1a237e, #283593); color: white;
+                  padding: 20px 40px; display: flex; justify-content: space-between;
+                  align-items: center; flex-wrap: wrap; gap: 10px; }
+        .header h1 { font-size: 1.4em; font-weight: 600; }
+        .header a { color: #fff; opacity: 0.9; text-decoration: none; font-weight: 600;
+                    border: 1px solid rgba(255,255,255,0.5); border-radius: 6px; padding: 6px 14px; }
+        .header a:hover { opacity: 1; background: rgba(255,255,255,0.12); }
+        .container { max-width: 1000px; margin: 0 auto; padding: 20px; }
+        .card { background: white; border-radius: 8px; padding: 22px 26px; margin-bottom: 20px;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        h2 { color: #1a237e; font-size: 1.15em; margin-bottom: 12px; }
+        h3 { color: #283593; font-size: 1.0em; margin: 16px 0 6px; }
+        p { margin: 8px 0; }
+        ul, ol { margin: 8px 0 8px 22px; }
+        li { margin: 5px 0; }
+        code { background: #f3f4f8; padding: 2px 6px; border-radius: 4px;
+               font-family: Consolas, 'Courier New', monospace; font-size: 0.88em; }
+        pre { background: #1e2233; color: #e8eaf6; padding: 14px 16px; border-radius: 6px;
+              overflow-x: auto; font-family: Consolas, 'Courier New', monospace;
+              font-size: 0.85em; line-height: 1.5; margin: 10px 0; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.9em; }
+        th, td { border: 1px solid #e0e0e0; padding: 7px 10px; text-align: left;
+                 vertical-align: top; }
+        th { background: #f5f7ff; color: #1a237e; font-weight: 600; }
+        .note { border-left: 4px solid #f9a825; background: #fffde7; padding: 10px 14px;
+                border-radius: 0 6px 6px 0; margin: 12px 0; }
+        .warn { border-left: 4px solid #c62828; background: #ffebee; padding: 10px 14px;
+                border-radius: 0 6px 6px 0; margin: 12px 0; }
+        .ok { border-left: 4px solid #2e7d32; background: #e8f5e9; padding: 10px 14px;
+              border-radius: 0 6px 6px 0; margin: 12px 0; }
+        .muted { color: #777; font-size: 0.88em; }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>📖 Data format &amp; getting started</h1>
+    <a href="/">← Back to the model</a>
+</div>
+
+<div class="container">
+
+    <div class="card">
+        <h2>1. What the model needs</h2>
+        <p>The simulation is driven by two CSV datasets:</p>
+        <ul>
+            <li><b>Aggregate incidence &amp; mortality data</b> — age-specific population, cancer
+                cases and deaths. Used to build the initial age distribution and the natural
+                mortality, and to <b>fit</b> the diagnosis and cancer-death hazards.</li>
+            <li><b>Individual staging data</b> — one row per diagnosed patient (age, stage,
+                aggressiveness). Used to train the stage-by-age model and the Gompertz
+                tumour-growth models.</li>
+        </ul>
+        <p>The repository ships with several ready-made datasets, so you can run the model
+            immediately without uploading anything. Pick one in the <b>Dataset</b> box of the
+            parameter panel: the selector sets the aggregate <i>and</i> the staging file together,
+            so the two can never end up coming from different populations. See <i>Appendix A</i>
+            for the full list, its provenance and citation, and for how to add your own.</p>
+        <div class="note">
+            <b>Advanced.</b> Under <i>Advanced: choose files individually</i> you can still point
+            the aggregate and staging inputs at any validated CSV in <code>data/</code>, including
+            files you uploaded yourself.
+        </div>
+        <div class="note">
+            <b>Delimiter.</b> Both files are semicolon-separated (<code>;</code>), not
+            comma-separated, and must contain a header row with the exact column names below.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>2. Aggregate file format</h2>
+        <p>Default name: <code>data_agg_rus.csv</code>. One row per single year of age.</p>
+        <table>
+            <tr><th>Column</th><th>Type</th><th>Range</th><th>Meaning</th></tr>
+            <tr><td><code>Age</code></td><td>integer</td><td>0 – 110</td>
+                <td>Single year of age</td></tr>
+            <tr><td><code>population</code></td><td>number</td><td>≥ 0</td>
+                <td>Population at that age. Any scale is fine — it is normalised into the
+                    initial age distribution.</td></tr>
+            <tr><td><code>cases</code></td><td>number</td><td>≥ 0</td>
+                <td>New cancer cases at that age (fits the diagnosis hazard).</td></tr>
+            <tr><td><code>deaths cancer</code></td><td>number</td><td>≥ 0</td>
+                <td>Cancer deaths at that age (fits the cancer-death hazard).</td></tr>
+            <tr><td><code>deaths all</code></td><td>number</td><td>≥ 0</td>
+                <td>All-cause deaths at that age (natural-mortality distribution).</td></tr>
+        </table>
+<pre>Age;population;cases;deaths cancer;deaths all
+0;239124.7967;0;0;8860.25
+1;239124.7967;0;0;720
+2;239124.7967;0;0;400
+...
+110;1234.5;12;9;400</pre>
+        <p class="muted">Requirements: at least one row for every age you care about (0–110 is
+            expected). Column names are matched exactly, including spaces.</p>
+    </div>
+
+    <div class="card">
+        <h2>3. Staging file format</h2>
+        <p>Default name: <code>data_ind.csv</code>. One row per diagnosed patient.</p>
+        <table>
+            <tr><th>Column</th><th>Type</th><th>Range</th><th>Meaning</th></tr>
+            <tr><td><code>Age</code></td><td>integer</td><td>0 – 110</td>
+                <td>Age at diagnosis</td></tr>
+            <tr><td><code>Stage</code></td><td>integer</td><td>1 – 4</td>
+                <td>Clinical stage at diagnosis (I–IV)</td></tr>
+            <tr><td><code>Aggressiveness</code></td><td>integer</td><td>0 or 1</td>
+                <td>0 = non-aggressive, 1 = aggressive</td></tr>
+        </table>
+<pre>Age;Stage;Aggressiveness
+70;4;1
+47;4;1
+67;3;1
+...
+58;1;0</pre>
+        <p class="muted">All four stages and both aggressiveness values should be present, otherwise
+            the fitted models are extrapolating from a narrow sample.</p>
+    </div>
+
+    <div class="card">
+        <h2>4. From scratch: upload → fit → simulate</h2>
+        <ol>
+            <li><b>Prepare the two CSV files</b> as described above, with exact header names.</li>
+            <li><b>Open the app</b> and expand <b>⚙ Parameters</b>.</li>
+            <li><b>Upload.</b> In the <b>Upload CSV</b> box choose the file, pick
+                <i>Aggr</i> or <i>Stage</i> next to it, and click <b>Upload</b>. The status line
+                reports the validation result (row count, or the exact problem).</li>
+            <li><b>Select.</b> Pick a shipped dataset in the <b>Dataset</b> box, or expand
+                <i>Advanced: choose files individually</i> to point <i>Aggregate data</i> and
+                <i>Staging data</i> at your own files. Leaving both at
+                <i>(default from config)</i> keeps the built-in pair from
+                <code>config/parameters.toml</code>.</li>
+            <li><b>Set the run size.</b> Population, Years and (optionally) Seed. Budget roughly
+                1.3 KB of RAM per agent at peak: a million agents needs about 1.3 GB.</li>
+            <li><b>Run.</b> <b>🔧 Fit + Simulate</b> calibrates the parameters on your data and then
+                simulates; <b>▶ Run Only</b> simulates with the current parameters. Charts and
+                summary cards appear below once the progress bar completes.</li>
+            <li><b>Export (optional).</b> <b>💾 Save</b> / <b>📂 Load</b> store and restore the
+                parameter set as JSON.</li>
+            <li><b>Sensitivity (optional).</b> <b>📊 Sensitivity</b> re-runs the model for a range of
+                lead-time multipliers and plots how the results move.</li>
+        </ol>
+        <div class="ok">
+            <b>Fastest sanity check.</b> Upload both files → select them → <b>▶ Run Only</b> with a
+            small population (e.g. 20 000). If that works, run <b>🔧 Fit + Simulate</b>.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>5. Downloads: agent history and chart CSVs</h2>
+        <p>After every <b>Fit + Simulate</b> or <b>Sensitivity</b> run a <b>⬇ Downloads</b> panel
+            appears listing the generated files. They are written to disk once, in chunks, and
+            served from there — nothing large is held in memory.</p>
+        <h3>Single run</h3>
+        <ul>
+            <li><code>agents.csv</code> — one row per agent, <b>including healthy ones</b>
+                (age, death cause, cancer onset, stage ages, treatment, screening, …).</li>
+            <li><code>agents_cancer.csv</code> — the same columns, cancer patients only.</li>
+            <li><code>chart_incidence.csv</code>, <code>chart_mortality.csv</code>,
+                <code>chart_stages.csv</code>, <code>chart_survival.csv</code>,
+                <code>chart_years_saved.csv</code>, <code>chart_diagnosis_rates.csv</code> —
+                the data behind each chart on the page.</li>
+            <li><code>summary.csv</code> — the summary metrics, one per row.</li>
+            <li><code>meta.json</code> — run metadata and a legend for every agent column.</li>
+        </ul>
+        <h3>Sensitivity</h3>
+        <ul>
+            <li><code>sens_chart_*.csv</code> — one file per chart; the first column is the x axis,
+                then one column per lead-time factor.</li>
+            <li><code>sens_metrics.csv</code> — aggregate metrics for every factor.</li>
+            <li><code>agents_factor_&lt;x&gt;.csv</code> — per-agent history for that factor
+                (cancer patients only, to keep the size down).</li>
+        </ul>
+        <p class="muted">Each run writes into its own directory
+            (<code>output/exports/&lt;run_id&gt;/</code>) and the download links carry that id:
+            a link is only valid for the run that produced it, so
+            <code>/api/download/&lt;run_id&gt;/&lt;file&gt;</code> with somebody else's id returns
+            404.</p>
+        <div class="warn">
+            Only the newest runs are kept — starting a new run prunes older bundles
+            (<code>EXPORT_DIRS_KEPT</code>, 3 by default). On a hosted instance the folder is also
+            lost when the service restarts, so download what you need before then. Data files use
+            <code>;</code> as the delimiter, like the input files.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>6. Uploading over the API (optional)</h2>
+<pre>curl -X POST -F "file=@my_aggregate.csv" -F "type=aggregate" http://localhost:5000/api/data/upload
+curl -X POST -F "file=@my_staging.csv"   -F "type=staging"   http://localhost:5000/api/data/upload</pre>
+        <p>A successful upload returns
+            <code>{"status":"ok","filename":"...","validation":"OK (N rows)"}</code>.
+            Invalid files are rejected with a message and are <b>not</b> stored. Then run with the
+            uploaded files selected:</p>
+<pre>curl -X POST http://localhost:5000/api/simulate \
+     -H "Content-Type: application/json" \
+     -d '{"population":20000,"seed":42,"fit":true,
+          "override_params":{"train_data_filename":"my_aggregate.csv",
+                             "train_staging_data_filename":"my_staging.csv"}}'</pre>
+        <p>To see what the <b>Dataset</b> dropdown offers, and where each file came from:</p>
+<pre>curl http://localhost:5000/api/datasets        # named datasets + provenance
+curl http://localhost:5000/api/data/list       # every validated CSV, classified</pre>
+    </div>
+
+    <div class="card">
+        <h2>7. Uploads in Docker</h2>
+        <p>Uploading works in the Docker image: the container runs as a non-root user, but
+            <code>/app/data</code> is writable, so the file is validated and stored there.</p>
+        <div class="warn">
+            <b>The container filesystem is ephemeral.</b> An uploaded file is <b>lost</b> when the
+            container is recreated — a redeploy, or any restart that starts a fresh container.
+            <code>docker-compose.yml</code> mounts <code>data/</code> on the host, so under Compose
+            the file survives; the datasets committed to the repository always survive either way.
+        </div>
+        <p>A file is stored under its sanitised name; uploading the same name again replaces it.
+            Files that belong to a shipped dataset cannot be overwritten. The file only affects a
+            run when it is selected in the <i>Advanced</i> dropdowns.</p>
+    </div>
+
+    <div class="card">
+        <h2>8. Troubleshooting</h2>
+        <table>
+            <tr><th>Message</th><th>Cause &amp; fix</th></tr>
+            <tr><td>Missing columns: …</td>
+                <td>The header row lacks the exact names. Check the delimiter (<code>;</code>) and
+                    that you picked the right type (Aggr vs Stage).</td></tr>
+            <tr><td>Column 'X' must be numeric</td>
+                <td>A value contains text or a decimal comma — use <code>.</code> as the decimal
+                    separator.</td></tr>
+            <tr><td>Column 'Stage' must be 1-4</td>
+                <td>Stages outside I–IV are not supported.</td></tr>
+            <tr><td>Column 'Aggressiveness' must be 0 or 1</td>
+                <td>Only 0 (non-aggressive) and 1 (aggressive) are accepted.</td></tr>
+            <tr><td>Age values must be between 0 and 110</td>
+                <td>The model simulates ages 0–110 only.</td></tr>
+            <tr><td>Only .csv files allowed</td>
+                <td>Rename the file or export it as CSV.</td></tr>
+            <tr><td>… is part of a shipped dataset and cannot be overwritten</td>
+                <td>Upload it under a different name — the built-in GLOBOCAN files are protected
+                    because every visitor runs against them.</td></tr>
+        </table>
+    </div>
+
+    <div class="card">
+        <h2>9. Two people using the site at once</h2>
+        <p>One instance runs <b>one simulation at a time</b> — a second population would need about
+            as much memory again — so the app serialises the work and keeps each visitor's results
+            apart instead:</p>
+        <ul>
+            <li><b>One run at a time.</b> If a simulation is already running, a new request is
+                refused with <code>409</code> and <i>“Another simulation is already running on this
+                instance”</i>. Wait for it to finish and try again. The busy flag is taken
+                atomically, so two requests arriving in the same instant cannot both start a
+                run.</li>
+            <li><b>Every run has an id.</b> A run returns its <code>run_id</code>; the page keeps
+                it in the browser tab (<code>sessionStorage</code>) and ignores any status, chart or
+                download carrying a different one. You are never shown another visitor's results —
+                if someone else's run finishes while your page is open, the status line tells you
+                so instead.</li>
+            <li><b>Downloads belong to their run.</b> Each run writes to its own directory and its
+                links are <code>/api/download/&lt;run_id&gt;/&lt;file&gt;</code>. A link from another
+                run (or the old link without an id) returns <code>404</code>.</li>
+            <li><b>Reloading is safe.</b> Reload the page during your own run and it resumes
+                watching it; another visitor's run is never adopted.</li>
+        </ul>
+        <div class="note">
+            <b>What is still shared.</b> Uploaded CSVs live in a single <code>data/</code> folder,
+            so two people uploading the same file name overwrite each other and every uploaded file
+            is visible to everyone. Files that belong to a shipped dataset (Appendix A) cannot be
+            overwritten by an upload at all, and a rejected upload never deletes an existing file.
+            Ask before re-using a file name, and download your results while they are still on
+            disk.
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Appendix A: the shipped datasets</h2>
+        <p>The datasets offered in the <b>Dataset</b> box are listed in
+            <code>data/datasets.json</code>. Choosing one sets the aggregate data file and the
+            staging data file <b>together</b>, so a mismatched pair (a United States aggregate with
+            German staging, say) cannot be picked by accident. An entry whose CSV is missing from
+            <code>data/</code> is dropped automatically, and the interface shows the description,
+            the totals and the citation stored next to the files.</p>
+        <table>
+            <tr><th>Dataset</th><th>Aggregate file</th><th>Staging file</th><th>Source</th></tr>
+            <tr><td><b>GLOBOCAN 2022 · Colorectal · USA</b><br><span class="muted">default</span></td>
+                <td><code>globocan_colorectum_usa_agg.csv</code></td>
+                <td><code>globocan_colorectum_usa_ind.csv</code><br><span class="muted">synthetic</span></td>
+                <td>GLOBOCAN 2022 (v1.1), IARC</td></tr>
+            <tr><td><b>GLOBOCAN 2022 · Colorectal · Germany</b></td>
+                <td><code>globocan_colorectum_germany_agg.csv</code></td>
+                <td><code>globocan_colorectum_germany_ind.csv</code><br><span class="muted">synthetic</span></td>
+                <td>GLOBOCAN 2022 (v1.1), IARC</td></tr>
+            <tr><td><b>Original MedicalModel2024 · Russia</b></td>
+                <td><code>data_agg_rus.csv</code></td>
+                <td><code>data_ind.csv</code></td>
+                <td>shipped with the original repository</td></tr>
+        </table>
+
+        <h3>Colorectal · USA</h3>
+        <p>Both sexes, United States of America. The aggregate file holds <b>151 162 new cases</b>
+            and <b>52 924 deaths</b> on a population of 334 805 268 — a crude incidence rate of
+            45.15 per 100 000, matching the published GLOBOCAN rates (colon 31.43 + rectum 13.72).</p>
+
+        <h3>Colorectal · Germany</h3>
+        <p>Both sexes, Germany. Same pipeline, but a markedly older population:
+            <b>59 851 new cases</b> and <b>25 844 deaths</b> on 83 883 587 people — 71.35 per
+            100 000, about 1.6× the American crude incidence. On an otherwise identical run
+            (20 000 agents, 30 years, same seed) it produces noticeably more colorectal cases than
+            the US dataset, which is a quick way to check that a run really used the data you
+            selected.</p>
+        <div class="note">
+            <b>Citation.</b> Ferlay J, Ervik M, Lam F, Laversanne M, Colombet M, Mery L,
+            Piñeros M, Znaor A, Soerjomataram I, Bray F (2024). <i>Global Cancer Observatory:
+            Cancer Today (version 1.1)</i>. Lyon, France: International Agency for Research on
+            Cancer. https://gco.iarc.who.int/today
+        </div>
+        <div class="warn">
+            <b>The staging file is synthetic.</b> GLOBOCAN publishes incidence and mortality only.
+            The stage and aggressiveness records are drawn from the real incidence-by-age profile
+            using a literature-based stage mix; they demonstrate the workflow and must not be read
+            as registry data.
+        </div>
+        <p class="muted">All-cause mortality (<code>deaths all</code>), which GLOBOCAN does not
+            publish either, is a Makeham–Gompertz pattern calibrated to the country's life
+            expectancy (77.5 years for the USA, 80.7 for Germany); the model only uses its shape.</p>
+
+        <h3>Regenerating a dataset, or adding your own country</h3>
+        <p>Both GLOBOCAN datasets are committed to the repository, so the app never calls the API
+            at runtime. To rebuild them, or to build a third country, pass the country to the two
+            tools:</p>
+<pre>python tools/build_globocan_dataset.py --country 840 --country-name "United States of America" \
+       --out-prefix globocan_colorectum_usa --life-expectancy 77.5
+python tools/build_globocan_dataset.py --country 276 --country-name Germany \
+       --out-prefix globocan_colorectum_germany --life-expectancy 80.7
+python tools/make_synthetic_staging.py --prefix globocan_colorectum_germany</pre>
+        <p>Country codes are ISO numeric (<code>840</code> USA, <code>276</code> Germany,
+            <code>392</code> Japan, …); the scripts query the GLOBOCAN 2022 gateway at
+            <code>gco-api.iarc.fr</code>. Then add one entry to <code>data/datasets.json</code> and
+            restart:</p>
+<pre>{
+  "id": "globocan2022_colorectum_japan",
+  "label": "GLOBOCAN 2022 · Colorectal · Japan",
+  "aggregate": "globocan_colorectum_japan_agg.csv",
+  "staging": "globocan_colorectum_japan_ind.csv",
+  "default": false,
+  "synthetic_staging": true,
+  "description": "Colorectal cancer, both sexes, Japan.",
+  "source": "GLOBOCAN 2022 (version 1.1), IARC",
+  "citation": "Ferlay J, et al. (2024). Global Cancer Observatory: Cancer Today (v1.1)."
+}</pre>
+        <p class="muted">That is the whole procedure: the file names in the entry are all the
+            application needs, so no code changes are involved. <code>default: true</code> may
+            appear on at most one entry; <code>synthetic_staging: true</code> controls the warning
+            tag shown next to the dataset in the interface.</p>
+    </div>
+
+    <div class="card">
+        <h2>Appendix B: Gompertz model parameters</h2>
+        <p>Tumour growth follows the <b>reduced Gompertz</b> model:</p>
+<pre>V(t) = exp(K - exp(C - B * t))      B = exp(log(B_pop) + eps),  eps ~ N(0, B_std^2)</pre>
+        <p>where <code>V(t)</code> is tumour size (a proxy for stage) at time <code>t</code> since
+            cancer onset. The aggressive and non-aggressive groups have separate parameter sets;
+            all four values can be edited individually in the parameter panel.</p>
+        <table>
+            <tr><th>Parameter</th><th>Meaning</th></tr>
+            <tr><td><code>K</code></td>
+                <td>Carrying capacity. <code>V(t)</code> approaches <code>exp(K)</code> as time
+                    grows, so a larger K means a larger final tumour.</td></tr>
+            <tr><td><code>C</code></td>
+                <td>Shape / offset parameter. Sets the initial size
+                    <code>V(0) = exp(K − exp(C))</code>, which is close to 0, and places the
+                    inflection point of the curve at <code>t = C / B</code>.</td></tr>
+            <tr><td><code>B_pop</code></td>
+                <td>Population-mean growth rate, on a log scale. Larger values mean faster
+                    progression; each patient draws <code>B = exp(log(B_pop) + eps)</code>.</td></tr>
+            <tr><td><code>B_std</code></td>
+                <td>Standard deviation of the individual random effect on <code>log(B)</code> in the
+                    model definition. It is stored and passed through faithfully, but the current
+                    simulation engine takes each agent's growth rate from <i>Growth rate limits</i>
+                    and the aggressiveness threshold, so changing <code>B_std</code> does not alter
+                    simulated results yet.</td></tr>
+        </table>
+    </div>
+
+    <p class="muted" style="text-align:center;margin:24px 0">
+        MedicalModel2024 — academic use. Based on
+        <a href="https://github.com/Magisterbes/BespalovPhd">Magisterbes/BespalovPhd</a>.
+    </p>
+</div>
+</body>
+</html>
