@@ -109,6 +109,12 @@
         <div class="summary-grid" id="summary-grid"></div>
     </div>
 
+    <div class="summary" id="downloads-section" style="display:none">
+        <h2>⬇ Downloads</h2>
+        <div id="downloads-list"></div>
+        <p class="status" id="downloads-note" style="margin-left:0;margin-top:10px"></p>
+    </div>
+
     <!-- Main charts -->
     <div class="charts">
         <div class="chart-box"><h3>Incidence (log10 rates)</h3><div id="chart-incidence" style="height:350px"></div></div>
@@ -184,7 +190,32 @@ function loadResults(){
         if(data.error){ setStatus('Error: '+data.error, false); return; }
         showSummary(data.summary);
         renderCharts(data.stats);
+        loadDownloads();
     });
+}
+
+function fmtSize(b){
+    if(b>=1048576) return (b/1048576).toFixed(1)+' MB';
+    if(b>=1024) return (b/1024).toFixed(0)+' KB';
+    return b+' B';
+}
+// Generated files (agent history + chart CSVs) are written to disk after each
+// run; only the latest bundle is kept.
+function loadDownloads(){
+    fetch('/api/downloads').then(r=>r.json()).then(d=>{
+        const sec=document.getElementById('downloads-section');
+        const list=document.getElementById('downloads-list');
+        if(!d||!d.ready||!d.files||!d.files.length){ if(sec)sec.style.display='none'; return; }
+        sec.style.display='block';
+        list.innerHTML=d.files.map(f=>
+            '<div class="param-row"><label>'+f.name+
+            '<div class="status" style="margin-left:0">'+f.description+' · '+fmtSize(f.size)+'</div></label>'+
+            '<a class="btn btn-secondary btn-small" href="/api/download/'+encodeURIComponent(f.name)+'">Download</a></div>'
+        ).join('');
+        const note=document.getElementById('downloads-note');
+        if(note)note.textContent=d.files.length+' file(s) · '+fmtSize(d.total_bytes)+
+            ' total · only the latest run is kept on disk';
+    }).catch(()=>{});
 }
 
 function showSummary(summary){
@@ -326,6 +357,7 @@ function loadSensitivityResults(){
         if(data.error){setStatus('Error: '+data.error,false);return;}
         setStatus('Sensitivity done in '+(data.runtime_sec||0).toFixed(1)+'s. Rendering charts...',false);
         drawSensitivity(data);
+        loadDownloads();
     });
 }
 function drawSensitivity(data){

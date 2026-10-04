@@ -1,11 +1,18 @@
 """Flask web UI for MedicalModel2024 microsimulation."""
-import json, os, sys, threading, numpy as np
+import json, logging, os, sys, threading, numpy as np
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_file
 from model.simulation import Simulation
 from model.random import get_random
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    datefmt='%H:%M:%S',
+)
+logger = logging.getLogger('web_app')
 
 app = Flask(__name__)
 _sim_instance = None
@@ -22,7 +29,91 @@ ALLOWED_EXTENSIONS = {'csv'}
 # Reduced Gompertz model V(t) = exp(K - exp(C - B*t)) with B = exp(log(B_pop) + eps)
 GOMPERTZ_KEYS = ('K', 'C', 'B_pop', 'B_std')
 
+# Generated download bundle. Rewritten on every run so only the latest one is kept
+# on disk; nothing large is held in memory (the files are streamed).
+EXPORT_DIR = os.environ.get('EXPORT_DIR', 'output/exports')
+_exports: list = []
+
 import pandas as pd
+
+# Human-readable descriptions shown next to each download link
+_FILE_DESCRIPTIONS = {
+    'agents.csv': 'Per-agent medical history — every agent, including healthy ones',
+    'agents_cancer.csv': 'Per-agent medical history — cancer patients only',
+    'summary.csv': 'Run summary (one metric per row)',
+    'meta.json': 'Run metadata and the column legend',
+    'chart_incidence.csv': 'Incidence rate by age',
+    'chart_mortality.csv': 'Mortality rate by age, with and without screening',
+    'chart_stages.csv': 'Stage distribution at diagnosis',
+    'chart_survival.csv': 'Cause-specific survival',
+    'chart_years_saved.csv': 'Years of life saved by screening',
+    'chart_diagnosis_rates.csv': 'Diagnosis rate by age',
+    'sens_metrics.csv': 'Aggregate metrics for every lead-time factor',
+    'sens_chart_incidence.csv': 'Incidence curves for every factor',
+    'sens_chart_mortality.csv': 'Mortality curves for every factor',
+    'sens_chart_screened_mortality.csv': 'Screened-mortality curves for every factor',
+    'sens_chart_survival.csv': 'Survival curves for every factor',
+    'sens_chart_survival_screening.csv': 'Screened-survival curves for every factor',
+    'sens_chart_years_saved.csv': 'Years-saved curves for every factor',
+    'sens_chart_stages.csv': 'Clinical stage distribution per factor',
+    'sens_chart_screening_stages.csv': 'Screening stage distribution per factor',
+}
+
+
+def _manifest(names):
+    """Build the download list from files that actually exist on disk."""
+    files = []
+    for name in names:
+        path = os.path.join(EXPORT_DIR, name)
+        if not os.path.exists(path):
+            continue
+        description = _FILE_DESCRIPTIONS.get(name)
+        if description is None and name.startswith('agents_factor_'):
+            description = ('Per-agent history for lead-time factor '
+                           + name[len('agents_factor_'):-len('.csv')] + ' (cancer patients only)')
+        files.append({'name': name, 'size': os.path.getsize(path),
+                      'description': description or ''})
+    return files
+
+
+def _export_single_run(sim):
+    """Stream the single-run download bundle to disk and return its manifest."""
+    from model import export
+    export.prepare_export_dir(EXPORT_DIR)
+    names = ['agents.csv', 'agents_cancer.csv']
+    export.write_agents_csv(sim.population, sim.current_date,
+                            os.path.join(EXPORT_DIR, 'agents.csv'))
+    export.write_agents_csv(sim.population, sim.current_date,
+                            os.path.join(EXPORT_DIR, 'agents_cancer.csv'), cancer_only=True)
+    names += export.write_charts_csv(sim.stats.agg_stats, EXPORT_DIR)
+    names.append(export.write_summary_csv(sim.get_summary(), EXPORT_DIR))
+    export.write_meta(EXPORT_DIR, {
+        'kind': 'single_run',
+        'population': int(sim.params.init_population),
+        'years': int(sim.params.years_to_simulate),
+        'seed': get_random().seed,
+    })
+    names.append('meta.json')
+    return _manifest(names)
+
+
+def _export_sensitivity_result(result):
+    """Collect the sensitivity bundle (agent files were written by the jobs)."""
+    from model import export
+    names = export.write_sensitivity_charts_csv(result, EXPORT_DIR)
+    metrics_file = export.write_sensitivity_metrics_csv(result, EXPORT_DIR)
+    if metrics_file:
+        names.append(metrics_file)
+    for factor in result.get('factors', []):
+        names.append('agents_factor_%g.csv' % float(factor))
+    export.write_meta(EXPORT_DIR, {
+        'kind': 'sensitivity',
+        'factors': result.get('factors'),
+        'runtime_sec': result.get('runtime_sec'),
+    })
+    names.append('meta.json')
+    return _manifest(names)
+
 
 def _validate_aggregate_csv(filepath: str) -> tuple[bool, str]:
     """Validate aggregate CSV has required columns and valid data."""
@@ -92,7 +183,7 @@ def api_simulate():
     _sim_result = None
     
     def run_sim():
-        global _sim_instance, _sim_result, _sim_progress, _sim_running
+        global _sim_instance, _sim_result, _sim_progress, _sim_running, _exports
         try:
             _sim_instance = Simulation(param_source=config, seed=seed)
             p = _sim_instance.params
@@ -116,6 +207,15 @@ def api_simulate():
             _sim_progress = 98
             _sim_result = {'summary': _sim_instance.get_summary(),
                            'stats': _sim_instance.stats.to_dict()}
+            # Stream the download bundle to disk while the agent arrays are still
+            # available, then release them (they are the bulk of the memory — a
+            # 1M-agent run holds ~1.2 GB that nothing reads afterwards).
+            try:
+                _exports = _export_single_run(_sim_instance)
+            except Exception as exc:
+                logger.warning("Export failed: %s", exc)
+                _exports = []
+            _sim_instance.population = None
             _sim_progress = 100
         except Exception as e:
             import traceback
@@ -132,6 +232,29 @@ def api_simulate():
 def api_status():
     return jsonify({'running': _sim_running, 'progress': _sim_progress,
                     'has_results': _sim_result is not None})
+
+
+@app.route('/api/downloads')
+def api_downloads():
+    """List the files generated by the latest run (agents history, chart CSVs)."""
+    total = sum(f['size'] for f in _exports)
+    return jsonify({'files': _exports, 'ready': bool(_exports), 'total_bytes': total})
+
+
+@app.route('/api/download/<path:name>')
+def api_download(name):
+    """Stream a generated file from disk.
+
+    Only files listed in the current manifest can be fetched, which also
+    prevents any path traversal.
+    """
+    entry = next((f for f in _exports if f['name'] == name), None)
+    if entry is None:
+        return jsonify({'error': f'Unknown file: {name}'}), 404
+    path = os.path.join(EXPORT_DIR, entry['name'])
+    if not os.path.exists(path):
+        return jsonify({'error': 'File is no longer available'}), 404
+    return send_file(path, as_attachment=True, download_name=entry['name'])
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -178,7 +301,7 @@ def api_parameters():
 @app.route('/api/sensitivity', methods=['POST'])
 def api_sensitivity():
     """Run lead time sensitivity analysis."""
-    global _sim_running
+    global _sim_running, _exports
     if _sim_running:
         return jsonify({'error': 'Simulation already running'}), 409
     _sim_running = True
@@ -191,16 +314,30 @@ def api_sensitivity():
     if n_jobs is not None:
         n_jobs = int(n_jobs)
 
+    # Prepare the export directory before the jobs start, so the worker processes
+    # write into a clean folder (they add one file per factor).
+    try:
+        from model import export as export_mod
+        export_mod.prepare_export_dir(EXPORT_DIR)
+    except Exception as exc:
+        logger.warning("Could not prepare the export directory: %s", exc)
+    _exports = []
+
     def run_sens():
-        global _sim_running
+        global _sim_running, _exports
         try:
             from model.sensitivity import run_sensitivity_analysis
             result = run_sensitivity_analysis(
                 param_source=data.get('config', 'config/parameters.toml'),
                 seed=seed, population=population, years=years, factors=factors,
-                n_jobs=n_jobs)
+                n_jobs=n_jobs, export_dir=EXPORT_DIR)
             global _sensitivity_result
             _sensitivity_result = result
+            try:
+                _exports = _export_sensitivity_result(result)
+            except Exception as exc:
+                logger.warning("Sensitivity export failed: %s", exc)
+                _exports = []
         except Exception as e:
             import traceback
             _sensitivity_result = {'error': f'{type(e).__name__}: {e}'}

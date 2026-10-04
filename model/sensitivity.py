@@ -18,7 +18,6 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
-from scipy.signal import savgol_filter
 
 from .simulation import Simulation
 from .random import get_random
@@ -130,7 +129,7 @@ def _run_sensitivity_job(job):
     and reuses the already-fitted parameters, so a factor's result is a pure
     function of (seed, factor) — identical to the sequential implementation.
     """
-    seed, population, years, factor, base_means, params_blob = job
+    seed, population, years, factor, base_means, params_blob, export_dir = job
     params = pickle.loads(params_blob)
     params.init_population = int(population)
     params.years_to_simulate = int(years)
@@ -139,6 +138,16 @@ def _run_sensitivity_job(job):
     # from_params skips re-reading the parameter file and retraining regressions
     sim = Simulation.from_params(params, seed=seed)
     _simulate(sim, years)
+    if export_dir:
+        # Per-factor agent history (cancer patients only — the full population
+        # would multiply the storage by the number of factors).
+        try:
+            from .export import write_agents_csv
+            name = 'agents_factor_%g.csv' % float(factor)
+            write_agents_csv(sim.population, sim.current_date,
+                             os.path.join(export_dir, name), cancer_only=True)
+        except Exception as exc:  # pragma: no cover - export must never break a run
+            logger.warning("Agent export failed for factor %s: %s", factor, exc)
     return _collect(sim)
 
 
@@ -149,6 +158,7 @@ def run_sensitivity_analysis(
     years: int = 15,  # Shorter for speed
     factors: Optional[List[float]] = None,
     n_jobs: Optional[int] = None,
+    export_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Run simulation for multiple lead time perturbation factors.
 
@@ -210,7 +220,7 @@ def run_sensitivity_analysis(
     logger.info(f"Baseline lead time means: {base_means}")
 
     params_blob = pickle.dumps(base_sim.params)
-    jobs = [(effective_seed, population, years, f, base_means, params_blob)
+    jobs = [(effective_seed, population, years, f, base_means, params_blob, export_dir)
             for f in factors]
 
     in_child = os.environ.get(_CHILD_FLAG) == '1'
@@ -257,7 +267,9 @@ def run_sensitivity_analysis(
     dt = time.perf_counter() - t0
     logger.info(f"Sensitivity analysis complete in {dt:.1f}s.")
 
-    # Smooth rate curves with Savitzky-Golay filter for cleaner visualization
+    # Smooth rate curves with Savitzky-Golay filter for cleaner visualization.
+    # scipy.signal is imported here so SciPy is not pulled in at app start-up.
+    from scipy.signal import savgol_filter
     for key in _SMOOTH_KEYS:
         if key in all_agg_stats and len(all_agg_stats[key]) > 0:
             win = min(11, len(all_agg_stats[key][0]) - 2)
@@ -266,10 +278,21 @@ def run_sensitivity_analysis(
                     all_agg_stats[key][i] = savgol_filter(all_agg_stats[key][i], win, 3)
                     all_agg_stats[key][i] = np.maximum(all_agg_stats[key][i], 0)
     
-    return {
+    out = {
         'factors': factors,
         'baseline_means': base_means,
         'metrics': results,
         'agg_stats': {k: [a.tolist() for a in v] for k, v in all_agg_stats.items()},
         'runtime_sec': dt,
     }
+
+    if export_dir:
+        # Chart data is small; the per-factor agent files were written by the jobs.
+        try:
+            from .export import write_sensitivity_charts_csv, write_sensitivity_metrics_csv
+            write_sensitivity_charts_csv(out, export_dir)
+            write_sensitivity_metrics_csv(out, export_dir)
+        except Exception as exc:  # pragma: no cover - export must never break a run
+            logger.warning("Sensitivity export failed: %s", exc)
+
+    return out
