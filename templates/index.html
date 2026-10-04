@@ -58,6 +58,9 @@
                 box-shadow: 0 4px 12px rgba(0,0,0,0.25); pointer-events: none; }
         .hint:hover::after, .hint:focus::after { opacity: 1; visibility: visible; }
         .hint:focus { outline: 2px solid #1a237e; outline-offset: 1px; }
+        /* inline variant: icon sits right after a field label, tooltip opens rightwards */
+        .hint-inline { margin-left: 5px; }
+        .hint-inline::after { left: 0; right: auto; }
         .param-row { display: flex; justify-content: space-between; align-items: center; margin: 4px 0; }
         .param-row label { font-weight: 400; font-size: 0.82em; color: #555; flex: 1; }
         .btn-small { padding: 4px 12px; font-size: 0.78em; }
@@ -145,7 +148,7 @@ function fmt5(v){
     return s;
 }
 function fmtArr(a){ return (a||[]).map(fmt5).join(', '); }
-function hintIcon(d){ return `<span class="hint" data-hint="${escAttr(d)}" aria-label="${escAttr(d)}" role="img" tabindex="0">i</span>`; }
+function hintIcon(d,cls){ return `<span class="hint${cls?' '+cls:''}" data-hint="${escAttr(d)}" aria-label="${escAttr(d)}" role="img" tabindex="0">i</span>`; }
 
 function toggleParams(){ 
     const c = document.getElementById('params-content');
@@ -233,17 +236,32 @@ function loadParamsFromServer(){
     refreshDataLists();
     fetch('/api/parameters').then(r=>r.json()).then(data=>{
         if(data.error){ grid.innerHTML = html + '<div class="param-group"><p style="color:#888;font-size:0.85em">Run Fit+Simulate to see calibrated parameters</p></div>'; return; }
+        const gAgg=data.gompertz_aggressive||[], gNon=data.gompertz_non_aggressive||[];
+        const gp=(arr,i)=>(arr&&arr.length>i)?fmt5(arr[i]):'';
+        // Per-variable explanations for the reduced Gompertz model V(t) = exp(K - exp(C - B*t))
+        const H_K='Carrying capacity. Tumour size approaches exp(K) as time goes to infinity, so a larger K means a larger final tumour.';
+        const H_C='Shape / offset parameter. Sets the initial tumour size V(0) = exp(K - exp(C)), which should be close to 0, and places the inflection point of the growth curve at t = C / B.';
+        const H_BPOP='Population-mean growth-rate parameter, on a log scale. Larger values mean faster tumour progression; each patient draws B = exp(log(B_pop) + eps).';
+        const H_BSTD='Standard deviation of the individual random effect on log(B) in the model definition. It is stored and passed through faithfully, but the current simulation engine takes each agent growth rate from Growth rate limits and the aggressiveness threshold, so changing B_std does not alter simulated results yet.';
         const groups=[
             {n:'Diagnose Hazard',d:'Piecewise-constant hazard of clinical diagnosis (6 betas = log-hazard per age interval). Controls how fast a growing preclinical cancer becomes clinically detected; fitted to aggregate incidence.',f:[{id:'diagnose_hazard_constants',l:'Piecewise betas (6)',v:fmtArr(data.diagnose_hazard_constants)}]},
             {n:'Cancer Death',d:'Log-hazard lambda of the exponential cancer-death hazard (rate = exp(lambda) per year after diagnosis). Governs cancer-specific survival; fitted to aggregate mortality.',f:[{id:'cancer_death_hazard_lambda',l:'Log-hazard lambda',v:fmt5(data.cancer_death_hazard_lambda)}]},
             {n:'Treatment',d:'Treatment effect parameters: per-stage efficiency (fraction of the hazard removed by treatment) and age-dependent cure multipliers.',f:[{id:'treatment_efficiency',l:'Efficiency (4 stages)',v:fmtArr(data.treatment_efficiency)},{id:'age_cure_constants',l:'Age cure multipliers (5)',v:fmtArr(data.age_cure_constants)}]},
             {n:'Lead Time',d:'Mean sojourn (lead) time in each of the 4 stages before clinical diagnosis, in years (exponential means). These parameters are not identifiable from data alone and are explored in the sensitivity analysis.',f:[{id:'lead_time_means',l:'Lead time means (4)',v:fmtArr(data.lead_time_means)}]},
             {n:'Screening',d:'Screening programme settings: participation rate, age window (start and finish) and frequency in years between rounds.',f:[{id:'participation_rate',l:'Participation rate',v:fmt5(data.participation_rate)},{id:'screening_start_age',l:'Start age',v:fmt5(data.screening_start_age)},{id:'screening_finish_age',l:'Finish age',v:fmt5(data.screening_finish_age)},{id:'screening_frequency',l:'Frequency',v:fmt5(data.screening_frequency)}]},
-            {n:'Gompertz Aggressive',d:'Gompertz tumour-growth parameters for aggressive cancers (K, C, B_pop). Tumour size V(t) = exp(K - exp(C - B_pop*t)), fitted to stage and lead-time data.',f:[{id:'gompertz_aggressive',l:'K,C,B_pop,B_std',v:fmtArr(data.gompertz_aggressive)}]},
-            {n:'Gompertz Non-Aggressive',d:'Gompertz tumour-growth parameters for non-aggressive cancers (K, C, B_pop), fitted separately from the aggressive group.',f:[{id:'gompertz_non_aggressive',l:'K,C,B_pop,B_std',v:fmtArr(data.gompertz_non_aggressive)}]},
+            {n:'Gompertz Aggressive',d:'Reduced Gompertz tumour-growth parameters for aggressive cancers. V(t) = exp(K - exp(C - B*t)) is the tumour size (proxy for stage) at time t since onset; the individual rate is B = exp(log(B_pop) + eps). Fitted to the staging and lead-time data.',f:[
+                {id:'gompertz_aggressive_K',l:'K',v:gp(gAgg,0),h:H_K},
+                {id:'gompertz_aggressive_C',l:'C',v:gp(gAgg,1),h:H_C},
+                {id:'gompertz_aggressive_B_pop',l:'B_pop',v:gp(gAgg,2),h:H_BPOP},
+                {id:'gompertz_aggressive_B_std',l:'B_std',v:gp(gAgg,3),h:H_BSTD}]},
+            {n:'Gompertz Non-Aggressive',d:'Reduced Gompertz tumour-growth parameters for non-aggressive cancers, fitted separately from the aggressive group. Same model: V(t) = exp(K - exp(C - B*t)).',f:[
+                {id:'gompertz_non_aggressive_K',l:'K',v:gp(gNon,0),h:H_K},
+                {id:'gompertz_non_aggressive_C',l:'C',v:gp(gNon,1),h:H_C},
+                {id:'gompertz_non_aggressive_B_pop',l:'B_pop',v:gp(gNon,2),h:H_BPOP},
+                {id:'gompertz_non_aggressive_B_std',l:'B_std',v:gp(gNon,3),h:H_BSTD}]},
             {n:'Other',d:'Miscellaneous parameters: growth-rate limits (min and max tumour growth), aggressiveness threshold (rate above which a cancer is aggressive), and reoccurrence probability after cure.',f:[{id:'growth_rate_limits',l:'Growth rate limits (2)',v:fmtArr(data.growth_rate_limits)},{id:'aggressiveness_threshold',l:'Aggressiveness threshold',v:fmt5(data.aggressiveness_threshold)},{id:'reoccurrence_prob',l:'Reoccurrence prob',v:fmt5(data.reoccurrence_prob)}]},
         ];
-        html += groups.map(g=>`<div class="param-group"><h4>${g.n}${g.d?hintIcon(g.d):''}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
+        html += groups.map(g=>`<div class="param-group"><h4>${g.n}${g.d?hintIcon(g.d):''}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}${f.h?hintIcon(f.h,'hint-inline'):''}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
         grid.innerHTML = html;
     });
 }
