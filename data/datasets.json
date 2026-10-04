@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "note": "Named default datasets shown in the UI. To add one: drop the two CSV files into data/, append an entry here (aggregate + staging filenames), and restart. Nothing in the application code needs to change. Every file listed is re-validated on startup, so an entry whose CSV is missing is simply not offered.",
+  "default": "globocan2022_colorectum_usa",
+  "datasets": [
+    {
+      "id": "globocan2022_colorectum_usa",
+      "label": "GLOBOCAN 2022 \u00b7 Colorectal \u00b7 USA",
+      "region": "United States of America",
+      "aggregate": "globocan_colorectum_usa_agg.csv",
+      "staging": "globocan_colorectum_usa_ind.csv",
+      "default": true,
+      "synthetic_staging": true,
+      "description": "Colorectal cancer, both sexes, United States. Real GLOBOCAN incidence and mortality per five-year age band, expanded to single years of age; stage distribution and aggressiveness are synthesised. Crude incidence 45.15 per 100k (151,162 cases, 52,924 deaths).",
+      "source": "GLOBOCAN 2022 (version 1.1), IARC / Global Cancer Observatory",
+      "citation": "Ferlay J, Ervik M, Lam F, Laversanne M, Colombet M, Mery L, Pineros M, Znaor A, Soerjomataram I, Bray F (2024). Global Cancer Observatory: Cancer Today (version 1.1). Lyon, France: International Agency for Research on Cancer. https://gco.iarc.who.int/today"
+    },
+    {
+      "id": "globocan2022_colorectum_germany",
+      "label": "GLOBOCAN 2022 \u00b7 Colorectal \u00b7 Germany",
+      "region": "Germany",
+      "aggregate": "globocan_colorectum_germany_agg.csv",
+      "staging": "globocan_colorectum_germany_ind.csv",
+      "default": false,
+      "synthetic_staging": true,
+      "description": "Colorectal cancer, both sexes, Germany. Same pipeline as the USA dataset but a much older age profile and a higher crude incidence (71.35 per 100k: 59,851 cases, 25,844 deaths). Useful for checking that the model tracks a different demographic shape.",
+      "source": "GLOBOCAN 2022 (version 1.1), IARC / Global Cancer Observatory",
+      "citation": "Ferlay J, Ervik M, Lam F, Laversanne M, Colombet M, Mery L, Pineros M, Znaor A, Soerjomataram I, Bray F (2024). Global Cancer Observatory: Cancer Today (version 1.1). Lyon, France: International Agency for Research on Cancer. https://gco.iarc.who.int/today"
+    },
+    {
+      "id": "legacy_medicalmodel2024_russia",
+      "label": "Original MedicalModel2024 dataset \u00b7 Russia",
+      "region": "Russia",
+      "aggregate": "data_agg_rus.csv",
+      "staging": "data_ind.csv",
+      "default": false,
+      "synthetic_staging": false,
+      "description": "The dataset shipped with the original C# MedicalModel: Russian demography together with staging data. Kept for backward compatibility and for reproducing historical runs; no machine-readable provenance file is available for it.",
+      "source": "Supplied with the original MedicalModel2024 repository",
+      "citation": "See the L\u00e9vy-Leboyer / MedicalModel2024 project documentation."
+    }
+  ]
+}

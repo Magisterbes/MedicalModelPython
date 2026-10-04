@@ -1,0 +1,16 @@
+{
+  "source": "GLOBOCAN 2022 (version 1.1), IARC / Global Cancer Observatory",
+  "url": "https://gco.iarc.who.int/today",
+  "citation": "Ferlay J, Ervik M, Lam F, Laversanne M, Colombet M, Mery L, Pineros M, Znaor A, Soerjomataram I, Bray F (2024). Global Cancer Observatory: Cancer Today (version 1.1). Lyon, France: International Agency for Research on Cancer. https://gco.iarc.who.int/today",
+  "site": "Colorectum (colon C18 + rectum C19-20)",
+  "country": "Germany (276)",
+  "sex": "both",
+  "year": 2022,
+  "totals": {
+    "cases": 59851,
+    "deaths": 25844,
+    "population": 83883587
+  },
+  "notes": "Cases and deaths are real GLOBOCAN 2022 figures per five-year age band, expanded to single years of age. GLOBOCAN reports 85+ as one open band, so that rate is applied to ages 85-110. \"deaths all\" is not published by GLOBOCAN: it is a Makeham-Gompertz all-cause mortality pattern calibrated to a life expectancy of 80.7 years.",
+  "delimiter": ";"
+}

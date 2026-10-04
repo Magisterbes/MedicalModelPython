@@ -1,0 +1,36 @@
+{
+  "synthetic": true,
+  "note": "Stage and aggressiveness are NOT published by GLOBOCAN. This file is synthesised for the accompanying aggregate dataset; do not interpret it as registry data.",
+  "aggregate_source": "globocan_colorectum_germany_agg.csv",
+  "n_records": 2000,
+  "seed": 2022,
+  "target_stage_mix": {
+    "1": 0.22,
+    "2": 0.25,
+    "3": 0.3,
+    "4": 0.23
+  },
+  "realized_stage_mix": {
+    "1": 0.2195,
+    "2": 0.2555,
+    "3": 0.3075,
+    "4": 0.2175
+  },
+  "aggressive_probability_by_stage": {
+    "1": 0.1,
+    "2": 0.2,
+    "3": 0.45,
+    "4": 0.65
+  },
+  "realized_aggressive_share": {
+    "1": 0.09567198177676538,
+    "2": 0.19765166340508805,
+    "3": 0.4373983739837398,
+    "4": 0.639080459770115
+  },
+  "age_range": [
+    16,
+    107
+  ],
+  "delimiter": ";"
+}

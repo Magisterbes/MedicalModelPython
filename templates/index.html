@@ -44,6 +44,11 @@
         .progress-bar .fill { height: 100%; background: #1a237e; border-radius: 4px;
                               transition: width 0.3s; width: 0%; }
         .status { font-size: 0.85em; color: #888; margin-left: 15px; }
+        /* Dataset selector: description, citation and the implied file pair */
+        .dataset-info { font-size: 0.78em; color: #666; line-height: 1.5; margin-top: 6px; }
+        .dataset-info b { color: #1a237e; }
+        .dataset-info .cite { color: #999; }
+        .dataset-info .files { font-family: Consolas, "Courier New", monospace; color: #444; }
         .param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
         .param-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
         .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px;
@@ -253,9 +258,14 @@ function renderCharts(stats){
 // --- Parameters ---
 function loadParamsFromServer(){
     const grid = document.getElementById('params-grid');
-    let html = `<div class="param-group"><h4>Data Files ${hintIcon('Input datasets for initialisation and calibration. Aggregate data provides age-specific population, case and death counts; staging data provides individual patient records used to fit the stage and aggressiveness (Gompertz) models.')}</h4>
-        <div class="param-row"><label>Aggregate data</label><select id="data_aggregate_select" onchange="selectDataFile('data_aggregate')" style="width:180px"><option value="">loading...</option></select></div>
-        <div class="param-row"><label>Staging data</label><select id="data_staging_select" onchange="selectDataFile('data_staging')" style="width:180px"><option value="">loading...</option></select></div>
+    let html = `<div class="param-group"><h4>Dataset ${hintIcon('Input datasets for initialisation and calibration. Aggregate data provides age-specific population, case and death counts; staging data provides individual patient records used to fit the stage and aggressiveness (Gompertz) models. Picking a named dataset sets BOTH files at once, so a mismatched pair (for example a USA aggregate with German staging) cannot happen by accident. The list and the citations come from data/datasets.json — see the guide for how to add your own.')}</h4>
+        <div class="param-row"><label>Default dataset</label><select id="dataset_select" onchange="selectDataset()" style="width:250px"><option value="">loading...</option></select></div>
+        <div class="dataset-info" id="dataset-info"></div>
+        <details style="margin-top:8px">
+            <summary style="cursor:pointer;color:#1a237e;font-size:0.8em;font-weight:600">Advanced: choose files individually</summary>
+            <div class="param-row" style="margin-top:6px"><label>Aggregate data</label><select id="data_aggregate_select" onchange="selectDataFile('data_aggregate')" style="width:180px"><option value="">(default from config)</option></select></div>
+            <div class="param-row"><label>Staging data</label><select id="data_staging_select" onchange="selectDataFile('data_staging')" style="width:180px"><option value="">(default from config)</option></select></div>
+        </details>
     </div>
     <div class="param-group"><h4>Upload CSV ${hintIcon('Upload a new aggregate or staging CSV. Files are validated (required columns, numeric and non-negative values, age 0-110) and saved in the data folder, then selectable above.')}</h4>
         <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
@@ -264,6 +274,7 @@ function loadParamsFromServer(){
             <button class="btn btn-secondary btn-small" onclick="uploadDataFromBtn()">Upload</button>
         </div>
     </div>`;
+    refreshDatasets();
     refreshDataLists();
     fetch('/api/parameters').then(r=>r.json()).then(data=>{
         if(data.error){ grid.innerHTML = html + '<div class="param-group"><p style="color:#888;font-size:0.85em">Run Fit+Simulate to see calibrated parameters</p></div>'; return; }
@@ -300,6 +311,66 @@ function saveParams(){ const n=prompt('File name:','config/params_fitted.json')|
 function loadParams(){ const n=prompt('File name:','config/params_fitted.json')||'config/params_fitted.json'; fetch('/api/parameters/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:n})}).then(r=>r.json()).then(d=>{if(d.error){alert('Error: '+d.error);return;}alert('Loaded from '+d.path);loadParamsFromServer();}); }
 function runWithParams(){ startRun({population:document.getElementById('population').value,seed:getSeed(),fit:false,override_params:gatherOverrideParams()}); }
 
+// --- Datasets ---
+// data/datasets.json is the single source of truth for the named datasets.
+// Selecting one sets the aggregate AND the staging file together, which is what
+// makes mismatched pairs (USA aggregate + German staging) impossible to pick.
+let datasetsById = {};
+
+function currentDatasetId(){ const s=document.getElementById('dataset_select'); return s?s.value:''; }
+
+function refreshDatasets(){
+    fetch('/api/datasets').then(r=>r.json()).then(d=>{
+        const sel=document.getElementById('dataset_select'); if(!sel)return;
+        datasetsById={};
+        (d.datasets||[]).forEach(ds=>{datasetsById[ds.id]=ds;});
+        sel.innerHTML='<option value="">(default from config)</option>'+
+            (d.datasets||[]).map(ds=>`<option value="${escAttr(ds.id)}">${escAttr(ds.label)}</option>`).join('');
+        const def=(d.default&&datasetsById[d.default])?d.default:'';
+        sel.value=def;
+        syncAdvancedSelects();
+        showDatasetInfo(def);
+    }).catch(()=>{});
+}
+
+function selectDataset(){
+    const id=currentDatasetId(), ds=datasetsById[id];
+    if(ds){ syncAdvancedSelects(); setStatus('Dataset: '+ds.label+' — applies on the next Fit / Run', false); }
+    else {
+        ['data_aggregate_select','data_staging_select'].forEach(i=>{const s=document.getElementById(i); if(s)s.value='';});
+        setStatus('Dataset: default from config', false);
+    }
+    showDatasetInfo(id);
+}
+
+// Mirror the dataset choice into the Advanced selects so that block always shows
+// exactly the files a run will use.
+function syncAdvancedSelects(){
+    const ds=datasetsById[currentDatasetId()]; if(!ds)return;
+    const set=(id,val)=>{const s=document.getElementById(id);
+        if(s&&Array.prototype.some.call(s.options,o=>o.value===val))s.value=val;};
+    set('data_aggregate_select', ds.aggregate);
+    set('data_staging_select', ds.staging);
+}
+
+function showDatasetInfo(id){
+    const box=document.getElementById('dataset-info'); if(!box)return;
+    const ds=datasetsById[id];
+    if(!ds){ box.innerHTML=''; return; }
+    const m=ds.meta||{}, t=m.totals||{}, bits=[];
+    if(ds.description)bits.push(escAttr(ds.description));
+    const stats=[];
+    if(t.cases)stats.push(Number(t.cases).toLocaleString()+' cases');
+    if(t.deaths)stats.push(Number(t.deaths).toLocaleString()+' deaths');
+    if(t.population)stats.push(Number(t.population).toLocaleString()+' population');
+    if(stats.length)bits.push('<b>'+stats.join(' · ')+'</b>');
+    if(ds.synthetic_staging)bits.push('<b>⚠ stage and aggressiveness are synthetic</b>, not registry data.');
+    if(m.source)bits.push(escAttr(m.source));
+    if(m.citation)bits.push('<span class="cite">'+escAttr(m.citation)+'</span>');
+    bits.push('<span class="files">'+escAttr(ds.aggregate)+'<br>'+escAttr(ds.staging)+'</span>');
+    box.innerHTML=bits.join('<br>');
+}
+
 function refreshDataLists(){
     fetch('/api/data/list').then(r=>r.json()).then(d=>{
         if(!d)return;
@@ -309,6 +380,9 @@ function refreshDataLists(){
             if(cur)s.value=cur;};
         fill('data_aggregate_select', d.aggregate);
         fill('data_staging_select', d.staging);
+        // The option lists only exist now, so re-apply the dataset's choice here
+        // as well: whichever of the two fetches lands last performs the mirroring.
+        syncAdvancedSelects();
     });
 }
 function selectDataFile(fid){ const s=document.getElementById(fid+'_select'); if(s) setStatus('Selected: '+s.value+'. Run simulation to apply.', false); }
@@ -325,7 +399,14 @@ function uploadData(file){
 function gatherOverrideParams(){
     const override={};
     document.querySelectorAll('#params-grid input').forEach(inp=>{if(inp.value!=='')override[inp.name]=inp.value;});
-    ['data_aggregate_select','data_staging_select'].forEach(id=>{const s=document.getElementById(id);if(s&&s.value){override[id==='data_aggregate_select'?'train_data_filename':'train_staging_data_filename']=s.value;}});
+    // The Advanced selects are the source of truth for the run; when one is left
+    // at "(default from config)" the named dataset (if any) supplies the file.
+    const ds=datasetsById[currentDatasetId()]||{};
+    [['data_aggregate_select','train_data_filename',ds.aggregate],
+     ['data_staging_select','train_staging_data_filename',ds.staging]].forEach(([id,key,fb])=>{
+        const s=document.getElementById(id), v=(s&&s.value)?s.value:(fb||'');
+        if(v)override[key]=v;
+    });
     const parsed={};
     for(const[k,v]of Object.entries(override)){
         if(k.endsWith('_filename')){parsed[k]=v;continue;}

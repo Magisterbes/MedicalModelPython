@@ -8,8 +8,11 @@ unreal_life_length = 110
 
 [data]
 data_dir = "data"
-train_data_filename = "data_agg_rus.csv"
-train_staging_data_filename = "data_ind.csv"
+# Fallback data files, used only when the UI is left at "(default from config)".
+# The named datasets offered in the UI are declared in data/datasets.json, which
+# lists each aggregate/staging pair together (see the guide, Appendix A).
+train_data_filename = "globocan_colorectum_usa_agg.csv"
+train_staging_data_filename = "globocan_colorectum_usa_ind.csv"
 
 [staging]
 stage_distribution_length = 4

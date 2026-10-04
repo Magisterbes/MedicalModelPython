@@ -387,6 +387,69 @@ def api_data_list():
     return jsonify({'aggregate': aggregate, 'staging': staging,
                     'files': aggregate + staging})
 
+
+DATASETS_MANIFEST = os.path.join(DATA_DIR, 'datasets.json')
+
+
+def _read_meta(data_dir: Path, filename: str) -> dict:
+    """Sidecar provenance written by the tools in tools/, if it is present."""
+    path = data_dir / (Path(filename).stem + '.meta.json')
+    try:
+        with open(path, encoding='utf-8') as handle:
+            return json.load(handle)
+    except (OSError, ValueError):
+        return {}
+
+
+def list_datasets() -> dict:
+    """Named datasets from data/datasets.json, filtered to files present on disk.
+
+    An entry is dropped unless *both* of its CSVs exist. That is deliberate: the
+    selector sets the aggregate and staging files together, so this is what stops
+    a run from silently pairing, say, a US aggregate with German staging.
+    Each surviving entry is enriched with its .meta.json provenance.
+    """
+    try:
+        with open(DATASETS_MANIFEST, encoding='utf-8') as handle:
+            manifest = json.load(handle)
+        if not isinstance(manifest, dict):
+            raise ValueError('manifest is not an object')
+    except (OSError, ValueError) as exc:
+        logger.warning('Dataset manifest unusable (%s): %s', DATASETS_MANIFEST, exc)
+        return {'datasets': [], 'default': None, 'note': ''}
+
+    data_dir = Path(DATA_DIR)
+    datasets, default_id = [], None
+    for entry in manifest.get('datasets', []):
+        aggregate, staging = entry.get('aggregate'), entry.get('staging')
+        if not aggregate or not staging:
+            logger.warning('Dataset %s: needs both aggregate and staging', entry.get('id'))
+            continue
+        missing = [f for f in (aggregate, staging) if not (data_dir / f).exists()]
+        if missing:
+            logger.warning('Dataset %s: skipping, missing %s',
+                           entry.get('id'), ', '.join(missing))
+            continue
+        item = dict(entry)
+        item['meta'] = _read_meta(data_dir, aggregate)
+        item['staging_meta'] = _read_meta(data_dir, staging)
+        item.pop('default', None)          # 'default' belongs to the manifest root
+        datasets.append(item)
+        if entry.get('default'):
+            default_id = entry['id']
+
+    if default_id is None and datasets:
+        default_id = datasets[0]['id']
+    return {'datasets': datasets, 'default': default_id,
+            'note': manifest.get('note', '')}
+
+
+@app.route('/api/datasets')
+def api_datasets():
+    """Named default datasets (data/datasets.json), validated against disk."""
+    return jsonify(list_datasets())
+
+
 @app.route('/api/data/upload', methods=['POST'])
 def api_data_upload():
     """Upload and validate a CSV data file."""
