@@ -195,13 +195,22 @@ def _compute_cancer_histories_numba(
         cancer_reoccurred[i] = _bernoulli(reoccurrence_prob, seed + 9)
 
 
-# Simple LCG random for numba
+# SplitMix64-style avalanche hashing for per-agent, per-draw random values.
+#
+# The kernel draws each agent's quantities from `_uniform(seed + k)` for successive
+# small k, so this function MUST map nearby indices to essentially independent
+# values. The previous LCG + single xorshift did not: measured corr(u(s), u(s+1))
+# = +0.36 and P(u(s+1) < u(s)) = 0.12 instead of 0.5, which silently coupled the
+# stage draw to lead time, cure, cancer-death age and the aggressiveness label —
+# e.g. aggressive tumours were drawn almost only at stage IV.
 @njit(cache=True)
 def _uniform(seed):
-    s = np.uint64(seed) + np.uint64(1)
-    s = s * np.uint64(6364136223846793005) + np.uint64(1442695040888963407)
-    s = s ^ (s >> np.uint64(21))
-    return float(s & np.uint64(0xFFFFFFFFFFFFF)) / float(np.uint64(0xFFFFFFFFFFFFF) + 1)
+    x = np.uint64(seed) + np.uint64(1)
+    x = (x + np.uint64(0x9E3779B97F4A7C15)) & np.uint64(0xFFFFFFFFFFFFFFFF)
+    x = ((x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)) & np.uint64(0xFFFFFFFFFFFFFFFF)
+    x = ((x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)) & np.uint64(0xFFFFFFFFFFFFFFFF)
+    x = x ^ (x >> np.uint64(31))
+    return float(x >> np.uint64(11)) / 9007199254740992.0
 
 
 @njit(cache=True)
