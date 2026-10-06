@@ -1,10 +1,11 @@
 """
-MedicalModel2024 Python Port
-============================
+MedicalModel2024 Python
+=======================
 Agent-based microsimulation model for cancer screening natural history.
 
-Mathematically equivalent to the original C# implementation,
-with improved optimization algorithms and vectorized computation.
+A Python/Numba re-implementation of the original C# model with corrected
+objective functions and vectorized computation. This repository is the reference
+implementation; it does not aim to reproduce the C# output.
 """
 
 __version__ = "1.0.0"

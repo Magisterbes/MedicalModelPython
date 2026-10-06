@@ -384,10 +384,8 @@ python tools/make_synthetic_staging.py --prefix globocan_colorectum_germany</pre
                     progression; each patient draws <code>B = exp(log(B_pop) + eps)</code>.</td></tr>
             <tr><td><code>B_std</code></td>
                 <td>Standard deviation of the individual random effect on <code>log(B)</code> in the
-                    model definition. It is stored and passed through faithfully, but the current
-                    simulation engine takes each agent's growth rate from <i>Growth rate limits</i>
-                    and the aggressiveness threshold, so changing <code>B_std</code> does not alter
-                    simulated results yet.</td></tr>
+                    model definition. The Gompertz curve is fitted and reported but does not drive
+                    the simulation, so changing <code>B_std</code> does not alter simulated results.</td></tr>
         </table>
     </div>
 

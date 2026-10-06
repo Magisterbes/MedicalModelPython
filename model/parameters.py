@@ -77,10 +77,10 @@ class Parameters:
     lead_time_by_stage_means: List[float] = field(default_factory=lambda: [1.0, 3.0, 4.0, 5.0])
     
     # ---- Natural history ----
-    reoccurrence_probability: float = 0.2
+    reoccurrence_probability: float = 0.2  # draws the exported flag only; no effect on survival/deaths/costs
     treatment_mortality_adjustment: float = 1.0
-    aggressiveness_rate_threshold: float = 0.2
-    growth_rate_limits: List[float] = field(default_factory=lambda: [1.5, 4.0])
+    aggressiveness_rate_threshold: float = 0.2  # only in the unreachable ttd==0 branch
+    growth_rate_limits: List[float] = field(default_factory=lambda: [1.5, 4.0])  # only in the unreachable ttd==0 branch
     
     # ---- Treatment parameters ----
     treatment_efficiency: List[float] = field(default_factory=lambda: [0.7, 0.3, 0.2, 0.2])
