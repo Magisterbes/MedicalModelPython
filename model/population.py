@@ -180,8 +180,8 @@ def _compute_cancer_histories_numba(
             continue
         
         # Treatment. An aggressive tumour has its cure odds multiplied by the
-        # per-stage odds ratio (default 1.0 = no effect). The transform is skipped
-        # when the ratio is exactly 1.0 so the default path stays bit-identical.
+        # per-stage odds ratio. The transform is skipped when the ratio is exactly
+        # 1.0 so that value remains a strict no-op (the config default is 1.5).
         age_cure_eff = _get_age_cure_eff(diag_age, age_cure_constants)
         cure_prob = age_cure_eff * treatment_efficiency[stage - 1]
         if cure_prob > 1.0:

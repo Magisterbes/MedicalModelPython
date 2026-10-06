@@ -39,10 +39,10 @@ treatment_efficiency = [0.7, 0.3, 0.2, 0.2]
 complications = [0.1]
 age_cure_constants = [1.0, 0.9, 0.5, 0.3, 0.1]
 # Odds ratio applied to the cure odds of an aggressive tumour, per stage I..IV.
-# 1.0 = no effect (aggressive and non-aggressive cure alike). Set by hand: it is
-# not estimated from data, because the staging file has no treatment-outcome
-# column. A scalar entered in the UI is expanded to all four stages.
-aggressiveness_cure_odds_ratio = [1.0, 1.0, 1.0, 1.0]
+# > 1 = an aggressive tumour is more likely to be cured, < 1 = less likely.
+# Set by hand: it is not estimated from data, because the staging file has no
+# treatment-outcome column. A scalar entered in the UI is expanded to all stages.
+aggressiveness_cure_odds_ratio = [1.5, 1.5, 1.5, 1.5]
 
 [risk_factors]
 # Not currently used in simulation core (defined for future use)

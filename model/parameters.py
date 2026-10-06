@@ -87,7 +87,7 @@ class Parameters:
     complications: List[float] = field(default_factory=lambda: [0.1])
     age_cure_constants: List[float] = field(default_factory=lambda: [1.0, 0.9, 0.5, 0.3, 0.1])
     # Cure-odds multiplier for an aggressive tumour, per stage I..IV (set by hand).
-    aggressiveness_cure_odds_ratio: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0, 1.0])
+    aggressiveness_cure_odds_ratio: List[float] = field(default_factory=lambda: [1.5, 1.5, 1.5, 1.5])
     
     # ---- Risk factors (defined but not currently used in simulation core) ----
     factors_rr: Dict[str, float] = field(default_factory=lambda: {"Smoking": 1.1, "Obesity": 1.05, "Activity": 0.95})
