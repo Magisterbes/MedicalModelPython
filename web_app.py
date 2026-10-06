@@ -387,8 +387,7 @@ def api_parameters():
         'reoccurrence_prob': p.reoccurrence_probability,
         'growth_rate_limits': p.growth_rate_limits,
         'aggressiveness_threshold': p.aggressiveness_rate_threshold,
-        'gompertz_aggressive': p.reduced_gompertz_aggressive,
-        'gompertz_non_aggressive': p.reduced_gompertz_non_aggressive,
+        'gompertz': p.reduced_gompertz,
     })
 
 @app.route('/api/sensitivity', methods=['POST'])
@@ -659,8 +658,7 @@ def api_save_params():
         'test_tp_selected': p.test_tp_selected,
         'test_fp_selected': p.test_fp_selected,
         'participation_rate': p.participation_rate,
-        'gompertz_aggressive': p.reduced_gompertz_aggressive,
-        'gompertz_non_aggressive': p.reduced_gompertz_non_aggressive,
+        'gompertz': p.reduced_gompertz,
         'growth_rate_limits': p.growth_rate_limits,
         'aggressiveness_threshold': p.aggressiveness_rate_threshold,
         'reoccurrence_prob': p.reoccurrence_probability,
@@ -719,15 +717,13 @@ def _apply_overrides(p, data):
         p.test_fp_selected = float(data['test_fp_selected'])
     if 'participation_rate' in data:
         p.participation_rate = float(data['participation_rate'])
-    # Reduced Gompertz models V(t) = exp(K - exp(C - B*t)), B = exp(log(B_pop) + eps).
+    # Reduced Gompertz model V(t) = exp(K - exp(C - B*t)), B = exp(log(B_pop) + eps).
     # Accept both the 4-element list form and the UI's separate per-variable fields
-    # (gompertz_aggressive_K / _C / _B_pop / _B_std).
-    for name in ('gompertz_aggressive', 'gompertz_non_aggressive'):
-        list_value = data.get(name)
-        fields = {k: data.get(f'{name}_{k}') for k in GOMPERTZ_KEYS}
-        if list_value is None and all(v is None for v in fields.values()):
-            continue
-        values = list(getattr(p, 'reduced_' + name))
+    # (gompertz_K / _C / _B_pop / _B_std).
+    list_value = data.get('gompertz')
+    fields = {k: data.get(f'gompertz_{k}') for k in GOMPERTZ_KEYS}
+    if list_value is not None or any(v is not None for v in fields.values()):
+        values = list(p.reduced_gompertz)
         if list_value is not None:
             if not isinstance(list_value, (list, tuple)):
                 list_value = [list_value]
@@ -739,9 +735,9 @@ def _apply_overrides(p, data):
         for i, key in enumerate(GOMPERTZ_KEYS):
             if fields[key] is not None:
                 values[i] = float(fields[key])
-        setattr(p, 'reduced_' + name, values)
-        model = getattr(p, name)
-        model.K, model.C, model.B_pop, model.B_std = values[0], values[1], values[2], values[3]
+        p.reduced_gompertz = values
+        p.gompertz.K, p.gompertz.C, p.gompertz.B_pop, p.gompertz.B_std = (
+            values[0], values[1], values[2], values[3])
     if 'growth_rate_limits' in data:
         p.growth_rate_limits = list(data['growth_rate_limits'])
     if 'aggressiveness_threshold' in data:

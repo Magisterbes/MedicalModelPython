@@ -104,7 +104,6 @@ def fit_gompertz(
     initial_params: np.ndarray,
     lead_times: np.ndarray,
     stages: np.ndarray,
-    is_aggressive: bool = False,
     method: str = 'Nelder-Mead',
     bounds: Tuple[float, float] = (-3.0, 3.0),
     verbose: bool = False,
@@ -119,8 +118,6 @@ def fit_gompertz(
         Lead time data for each observation.
     stages : np.ndarray
         Integer stage data (1-4).
-    is_aggressive : bool
-        Whether fitting aggressive subtype.
     method : str
         'differential_evolution' (recommended), 'Nelder-Mead', 'L-BFGS-B'.
     bounds : tuple
@@ -188,7 +185,6 @@ def fit_gompertz(
         'n_iter': int(n_iter),
         'success': bool(success),
         'method': method,
-        'is_aggressive': is_aggressive,
     }
 
 

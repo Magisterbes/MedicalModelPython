@@ -84,33 +84,22 @@ def _run_fitting(sim: Simulation):
     params.diagnose_hazard.update()
     logger.info(f"  LL={r['neg_ll']:.4f}, iters={r['n_iter']}")
     
-    # 2. Gompertz: Nelder-Mead (3 params, mildly noisy) — ~1s total
-    logger.info("Fitting Gompertz models (Nelder-Mead)...")
+    # 2. Gompertz: Nelder-Mead (3 params, mildly noisy) — ~1s. One model for all.
+    logger.info("Fitting Gompertz model (Nelder-Mead)...")
     from optimization import fit_gompertz, expand_train_data
     lead_time_rates = np.array(params.lead_time_distributions)
     
-    for is_agg, name, init_key in [(False, 'NonAgg', 'reduced_gompertz_non_aggressive'),
-                                     (True, 'Agg', 'reduced_gompertz_aggressive')]:
-        df = params.individual_data
-        sub = df[df['Aggressiveness'] == (1 if is_agg else 0)]
-        expanded = expand_train_data(sub, lead_time_rates)
-        init_p = getattr(params, init_key)
-        
-        r = fit_gompertz(np.array(init_p), expanded['LeadTime'].values,
-                         expanded['Stage'].values, is_aggressive=is_agg,
-                         method='Nelder-Mead')
-        
-        if is_agg:
-            params.reduced_gompertz_aggressive = r['params'].tolist()
-            params.gompertz_aggressive.K = r['K']
-            params.gompertz_aggressive.C = r['C']
-            params.gompertz_aggressive.B_pop = r['B_pop']
-        else:
-            params.reduced_gompertz_non_aggressive = r['params'].tolist()
-            params.gompertz_non_aggressive.K = r['K']
-            params.gompertz_non_aggressive.C = r['C']
-            params.gompertz_non_aggressive.B_pop = r['B_pop']
-        logger.info(f"  {name}: LL={r['neg_ll']:.4f}, K={r['K']:.3f}, C={r['C']:.3f}, B={r['B_pop']:.3f}")
+    expanded = expand_train_data(params.individual_data, lead_time_rates)
+    init_p = params.reduced_gompertz
+    
+    r = fit_gompertz(np.array(init_p), expanded['LeadTime'].values,
+                     expanded['Stage'].values, method='Nelder-Mead')
+    
+    params.reduced_gompertz = r['params'].tolist()
+    params.gompertz.K = r['K']
+    params.gompertz.C = r['C']
+    params.gompertz.B_pop = r['B_pop']
+    logger.info(f"  Gompertz: LL={r['neg_ll']:.4f}, K={r['K']:.3f}, C={r['C']:.3f}, B={r['B_pop']:.3f}")
     
     # 3. Mortality: L-BFGS-B (1 param, smooth) — ~0.03s
     logger.info("Fitting mortality hazard (L-BFGS-B)...")

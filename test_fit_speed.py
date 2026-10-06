@@ -21,25 +21,20 @@ r = fit_diagnose_hazard(
 )
 print(f"Diag L-BFGS-B: {time.time() - t0:.2f}s, LL={r['neg_ll']:.4f}")
 
-# Gompertz (Nelder-Mead, 3 params, fast)
+# Gompertz (Nelder-Mead, 3 params, fast) — one model for all
 lead_time_rates = np.array(params.lead_time_distributions)
-for is_agg, name in [(False, 'NonAgg'), (True, 'Agg')]:
-    df = params.individual_data
-    sub = df[df['Aggressiveness'] == (1 if is_agg else 0)]
-    expanded = expand_train_data(sub, lead_time_rates)
-    init_p = (params.reduced_gompertz_aggressive if is_agg
-              else params.reduced_gompertz_non_aggressive)
-    t0 = time.time()
-    r = fit_gompertz(
-        np.array(init_p),
-        expanded['LeadTime'].values,
-        expanded['Stage'].values,
-        is_aggressive=is_agg,
-        method='Nelder-Mead',
-    )
-    dt = time.time() - t0
-    nll = r['neg_ll']
-    print(f"Gompertz {name}: {dt:.2f}s, LL={nll:.4f}")
+expanded = expand_train_data(params.individual_data, lead_time_rates)
+init_p = params.reduced_gompertz
+t0 = time.time()
+r = fit_gompertz(
+    np.array(init_p),
+    expanded['LeadTime'].values,
+    expanded['Stage'].values,
+    method='Nelder-Mead',
+)
+dt = time.time() - t0
+nll = r['neg_ll']
+print(f"Gompertz: {dt:.2f}s, LL={nll:.4f}")
 
 # Mortality (L-BFGS-B, 1 param, smooth)
 t0 = time.time()

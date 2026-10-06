@@ -22,8 +22,7 @@ diagnose_hazard_spec = "piecewise, -1@-11.9;0@0.01;40@0.28;50@-0.11;60@-0.1;70@-
 cancer_death_hazard_spec = "exp, 1"
 
 [gompertz]
-reduced_gompertz_non_aggressive = [0.1, 0.3, 0.1, 0.1]
-reduced_gompertz_aggressive = [0.1, 0.3, 0.1, 0.1]
+reduced_gompertz = [0.1, 0.3, 0.1, 0.1]
 
 [lead_time]
 lead_time_by_stage_means = [1.0, 3.0, 4.0, 5.0]

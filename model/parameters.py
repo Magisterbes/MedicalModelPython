@@ -70,8 +70,7 @@ class Parameters:
     cancer_death_hazard_spec: str = "exp, 1"
     
     # ---- Gompertz model initial parameters (before fitting) ----
-    reduced_gompertz_non_aggressive: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.1, 0.1])
-    reduced_gompertz_aggressive: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.1, 0.1])
+    reduced_gompertz: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.1, 0.1])
     
     # ---- Lead time means by stage (exponential distribution means) ----
     lead_time_by_stage_means: List[float] = field(default_factory=lambda: [1.0, 3.0, 4.0, 5.0])
@@ -121,9 +120,8 @@ class Parameters:
     diagnose_hazard: Optional[Hazard] = None
     cancer_death_hazard: Optional[Hazard] = None
     
-    # Gompertz models
-    gompertz_aggressive: Optional[GompertzModel] = None
-    gompertz_non_aggressive: Optional[GompertzModel] = None
+    # Gompertz model (fitted once on all records)
+    gompertz: Optional[GompertzModel] = None
     
     # Lead time distributions (exponential scales)
     lead_time_distributions: Optional[List[float]] = None
@@ -140,10 +138,6 @@ class Parameters:
     train_incidence: Optional[np.ndarray] = None
     train_mortality: Optional[np.ndarray] = None
     
-    # Expanded training data for Gompertz fitting
-    expanded_data_aggressive: Optional[pd.DataFrame] = None
-    expanded_data_non_aggressive: Optional[pd.DataFrame] = None
-    
     # Raw data frames
     train_data: Optional[pd.DataFrame] = None
     individual_data: Optional[pd.DataFrame] = None
@@ -154,8 +148,7 @@ class Parameters:
     
     def __post_init__(self):
         """Convert lists to numpy arrays where appropriate."""
-        self.reduced_gompertz_non_aggressive = list(self.reduced_gompertz_non_aggressive)
-        self.reduced_gompertz_aggressive = list(self.reduced_gompertz_aggressive)
+        self.reduced_gompertz = list(self.reduced_gompertz)
         self.lead_time_by_stage_means = list(self.lead_time_by_stage_means)
         self.treatment_efficiency = list(self.treatment_efficiency)
         self.age_cure_constants = list(self.age_cure_constants)
@@ -402,13 +395,10 @@ class Parameters:
         staging_reg = self._get_model(df)
         self._get_stage_by_age_reg_generator(staging_reg, df)
         
-        # Train Gompertz models
-        logger.info("Training Gompertz models...")
-        aggressive_df = df[df['Aggressiveness'] == 1]
-        non_aggressive_df = df[df['Aggressiveness'] == 0]
+        # Train a single Gompertz model on all staging records (one model for all).
+        logger.info("Training Gompertz model...")
         
-        self.gompertz_aggressive = self._get_gompertz_model(aggressive_df, True)
-        self.gompertz_non_aggressive = self._get_gompertz_model(non_aggressive_df, False)
+        self.gompertz = self._get_gompertz_model()
         
         # Aggressiveness distribution by stage
         self.proportion_of_aggressive = self._get_aggressiveness_distribution(df)
@@ -462,23 +452,15 @@ class Parameters:
             probs = exp_s / exp_s.sum()
             self.stage_by_age_reg_generator[age_gr] = probs
     
-    def _get_gompertz_model(self, df: pd.DataFrame, is_aggressive: bool) -> GompertzModel:
-        """Train Gompertz model via Nelder-Mead optimization.
-        
-        This is a placeholder — actual fitting is done by the optimization module.
-        Here we return a model with initial parameters.
-        
-        Equivalent to C# Parameters.GetGompertzModel().
+    def _get_gompertz_model(self) -> GompertzModel:
+        """Initialise the single Gompertz model from the configured starting point.
+
+        Actual fitting is done by the optimization module (run_simulation); here we
+        only build the model object so downstream reporting has somewhere to write
+        the fitted K/C/B_pop.
         """
-        if is_aggressive:
-            params = self.reduced_gompertz_aggressive
-        else:
-            params = self.reduced_gompertz_non_aggressive
-        
-        return GompertzModel(
-            K=params[0], C=params[1],
-            B_pop=params[2], B_std=params[3]
-        )
+        p = self.reduced_gompertz
+        return GompertzModel(K=p[0], C=p[1], B_pop=p[2], B_std=p[3])
     
     def _get_aggressiveness_distribution(self, df: pd.DataFrame) -> np.ndarray:
         """Compute proportion of aggressive cancers by stage.
