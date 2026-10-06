@@ -45,8 +45,8 @@ class Population:
 def generate_population(n_agents, init_age_dist_cdf, aging_dist_cdf,
     diagnose_hazard_values, lead_time_rates, stage_by_age_probs,
     proportion_aggressive, growth_rate_limits, aggressiveness_rate_threshold,
-    treatment_efficiency, age_cure_constants, cancer_death_hazard_lambda,
-    reoccurrence_prob, unreal_life_length, seed):
+    treatment_efficiency, age_cure_constants, aggressiveness_cure_odds_ratio,
+    cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length, seed):
     
     rng = np.random.Generator(np.random.PCG64(np.random.SeedSequence(seed)))
     pop = Population(n_agents, unreal_life_length)
@@ -93,8 +93,9 @@ def generate_population(n_agents, init_age_dist_cdf, aging_dist_cdf,
         proportion_aggressive,
         np.array(growth_rate_limits, dtype=np.float64),
         aggressiveness_rate_threshold, treatment_efficiency,
-        age_cure_constants, cancer_death_hazard_lambda,
-        reoccurrence_prob, unreal_life_length,
+        age_cure_constants,
+        np.array(aggressiveness_cure_odds_ratio, dtype=np.float64),
+        cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length,
         pop.cancer_incidence_age, pop.cancer_diagnose_stage,
         pop.cancer_is_aggressive, pop.cancer_growth_rate,
         pop.cancer_is_cured, pop.cancer_death_age_init,
@@ -111,8 +112,8 @@ def _compute_cancer_histories_numba(
     stage_by_age_keys, stage_by_age_vals,
     proportion_aggressive, growth_rate_limits,
     aggressiveness_rate_threshold, treatment_efficiency,
-    age_cure_constants, cancer_death_hazard_lambda,
-    reoccurrence_prob, unreal_life_length,
+    age_cure_constants, aggressiveness_cure_odds_ratio,
+    cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length,
     cancer_incidence_age, cancer_diagnose_stage,
     cancer_is_aggressive, cancer_growth_rate,
     cancer_is_cured, cancer_death_age_init,
@@ -178,11 +179,22 @@ def _compute_cancer_histories_numba(
         if diag_age > nat_death and stages[4] > nat_death:
             continue
         
-        # Treatment
+        # Treatment. An aggressive tumour has its cure odds multiplied by the
+        # per-stage odds ratio (default 1.0 = no effect). The transform is skipped
+        # when the ratio is exactly 1.0 so the default path stays bit-identical.
         age_cure_eff = _get_age_cure_eff(diag_age, age_cure_constants)
         cure_prob = age_cure_eff * treatment_efficiency[stage - 1]
         if cure_prob > 1.0:
             cure_prob = 1.0
+        or_ = aggressiveness_cure_odds_ratio[stage - 1]
+        if is_agg and or_ != 1.0:
+            p = cure_prob
+            if p <= 0.0:
+                p = 1e-9
+            elif p >= 1.0:
+                p = 1.0 - 1e-9
+            odds = (p / (1.0 - p)) * or_
+            cure_prob = odds / (1.0 + odds)
         cured = _bernoulli(cure_prob, seed + 6)
         cancer_is_cured[i] = cured
         

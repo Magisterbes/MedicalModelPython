@@ -139,6 +139,8 @@ class Simulation:
             aggressiveness_rate_threshold=self.params.aggressiveness_rate_threshold,
             treatment_efficiency=np.array(self.params.treatment_efficiency),
             age_cure_constants=np.array(self.params.age_cure_constants),
+            aggressiveness_cure_odds_ratio=np.array(
+                self.params.aggressiveness_cure_odds_ratio),
             cancer_death_hazard_lambda=cancer_death_lambda,
             reoccurrence_prob=self.params.reoccurrence_probability,
             unreal_life_length=self.params.unreal_life_length,

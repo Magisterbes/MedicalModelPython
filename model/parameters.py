@@ -86,6 +86,8 @@ class Parameters:
     treatment_efficiency: List[float] = field(default_factory=lambda: [0.7, 0.3, 0.2, 0.2])
     complications: List[float] = field(default_factory=lambda: [0.1])
     age_cure_constants: List[float] = field(default_factory=lambda: [1.0, 0.9, 0.5, 0.3, 0.1])
+    # Cure-odds multiplier for an aggressive tumour, per stage I..IV (set by hand).
+    aggressiveness_cure_odds_ratio: List[float] = field(default_factory=lambda: [1.0, 1.0, 1.0, 1.0])
     
     # ---- Risk factors (defined but not currently used in simulation core) ----
     factors_rr: Dict[str, float] = field(default_factory=lambda: {"Smoking": 1.1, "Obesity": 1.05, "Activity": 0.95})
@@ -157,6 +159,7 @@ class Parameters:
         self.lead_time_by_stage_means = list(self.lead_time_by_stage_means)
         self.treatment_efficiency = list(self.treatment_efficiency)
         self.age_cure_constants = list(self.age_cure_constants)
+        self.aggressiveness_cure_odds_ratio = list(self.aggressiveness_cure_odds_ratio)
         self.growth_rate_limits = list(self.growth_rate_limits)
     
     @classmethod

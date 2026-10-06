@@ -374,6 +374,7 @@ def api_parameters():
         'cancer_death_hazard_lambda': float(p.cancer_death_hazard.constants[0]),
         'treatment_efficiency': p.treatment_efficiency,
         'age_cure_constants': p.age_cure_constants,
+        'aggressiveness_cure_odds_ratio': p.aggressiveness_cure_odds_ratio,
         'lead_time_means': p.lead_time_by_stage_means,
         'test_tp': p.test_tp,
         'test_fp': p.test_fp,
@@ -653,6 +654,7 @@ def api_save_params():
         'cancer_death_hazard_lambda': float(p.cancer_death_hazard.constants[0]),
         'treatment_efficiency': p.treatment_efficiency,
         'age_cure_constants': p.age_cure_constants,
+        'aggressiveness_cure_odds_ratio': p.aggressiveness_cure_odds_ratio,
         'lead_time_means': p.lead_time_by_stage_means,
         'test_tp_selected': p.test_tp_selected,
         'test_fp_selected': p.test_fp_selected,
@@ -701,8 +703,16 @@ def _apply_overrides(p, data):
         p.treatment_efficiency = list(data['treatment_efficiency'])
     if 'age_cure_constants' in data:
         p.age_cure_constants = list(data['age_cure_constants'])
+    if 'aggressiveness_cure_odds_ratio' in data:
+        v = data['aggressiveness_cure_odds_ratio']
+        if not isinstance(v, (list, tuple)):
+            v = [v] * 4
+        p.aggressiveness_cure_odds_ratio = [float(x) for x in v][:4]
     if 'lead_time_means' in data:
         p.lead_time_by_stage_means = list(data['lead_time_means'])
+        # The engine reads the cached lead_time_distributions, not the means, so
+        # re-derive them after the edit (this field used to be inert).
+        p._init_lead_time()
     if 'test_tp_selected' in data:
         p.test_tp_selected = float(data['test_tp_selected'])
     if 'test_fp_selected' in data:
