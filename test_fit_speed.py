@@ -47,4 +47,4 @@ r = fit_cancer_death_hazard(
 )
 print(f"Mort L-BFGS-B: {time.time() - t0:.2f}s, LL={r['neg_ll']:.4f}")
 
-print("\nDone! Total fit time is now well under a second (vectorized objectives).")
+print("\nDone. Fits: diagnose hazard (L-BFGS-B), single Gompertz (Nelder-Mead), mortality (L-BFGS-B).")

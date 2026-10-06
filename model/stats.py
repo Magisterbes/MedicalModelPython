@@ -31,6 +31,10 @@ class StatsCollection:
             'after_diagnosis': np.zeros(200, dtype=np.float64),
             'diagnosis_rates': np.zeros(100, dtype=np.float64),
         }
+        # Cause-specific survival and cure fraction, stratified by stage and
+        # aggressiveness (filled in gather_stats).
+        self.survival_by_group: Dict = {}
+        self.cure_by_group: Dict = {}
 
     def gather_stats(self, population, params, current_date):
         pop = population
@@ -65,6 +69,9 @@ class StatsCollection:
 
         # Survival curves (vectorized)
         _calc_survival_batch(pop, final_ages, agg)
+
+        # Cause-specific survival and cure fraction by stage and aggressiveness
+        self.survival_by_group, self.cure_by_group = compute_survival_by_group(pop, current_date)
 
         # People saved / years saved (vectorized over cancer agents)
         if idxc.size:
@@ -123,7 +130,10 @@ class StatsCollection:
         agg['survival'] = _cause_surv(agg['survival'], agg['cancer_mortality_age'])
 
     def to_dict(self) -> dict:
-        return {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in self.agg_stats.items()}
+        d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in self.agg_stats.items()}
+        d['survival_by_group'] = self.survival_by_group
+        d['cure_by_group'] = self.cure_by_group
+        return d
 
 
 def _calc_survival_batch(pop, final_ages, agg):
@@ -247,3 +257,77 @@ def _cause_surv(alive, dead):
             H += dead[i] / alive[i]
         S[i] = np.exp(-H)
     return S
+
+
+def compute_survival_by_group(pop, current_date, horizon=30):
+    """Cause-specific survival from diagnosis, stratified by stage and aggressiveness.
+
+    "Survive cancer" means cured (clinically or via screening). An uncured patient
+    dies of cancer when the untreated cancer-death age is reached before natural
+    death — the same rule used by ``compute_death_causes_vec``. Cured patients, and
+    uncured patients who die of other causes first, are censored.
+
+    Returns
+    -------
+    (survival, cure_frac)
+      survival : dict key -> list of S(t) for t = 0..horizon-1. Keys are
+                 'all_agg'/'all_nonagg' (pooled over stage) and
+                 's1_agg'..'s4_agg' / 's1_nonagg'..'s4_nonagg'.
+      cure_frac: dict group -> {'agg': fraction cured, 'nonagg': fraction cured},
+                 group in {'all', 's1', 's2', 's3', 's4'}.
+    """
+    final = pop.ages(current_date).astype(np.float64)
+    idx = np.where(pop.has_cancer)[0]
+    if idx.size == 0:
+        return {}, {}
+
+    d_age = pop.diagnosis_age[idx].astype(np.float64)
+    keep = (d_age != -1) & (d_age <= final[idx])
+    idx = idx[keep]
+    if idx.size == 0:
+        return {}, {}
+
+    d_age = pop.diagnosis_age[idx].astype(np.float64)
+    n_death = pop.natural_death_age[idx].astype(np.float64)
+    final_i = final[idx].astype(np.float64)
+    init_death = pop.cancer_death_age_init[idx].astype(np.float64)
+    cured = (pop.cancer_is_cured[idx] | pop.cancer_is_screening_cured[idx])
+    stage = pop.cancer_diagnose_stage[idx].astype(np.int64)
+    agg = pop.cancer_is_aggressive[idx].astype(np.int64)
+
+    # A cancer death is an event only when the tumour is not cured and the
+    # untreated cancer-death age is reached before natural death.
+    event = (~cured) & (init_death <= n_death)
+    event_time = np.where(event, init_death - d_age, horizon + 1.0)
+    t_end = np.where(event, event_time, np.minimum(n_death, final_i) - d_age)
+    t_end = np.clip(t_end, 0.0, horizon)
+
+    def _curve(sub):
+        if not sub.any():
+            return [1.0] * horizon
+        te = t_end[sub]
+        ee = event_time[sub]
+        at_risk = np.zeros(horizon, dtype=np.float64)
+        dead = np.zeros(horizon, dtype=np.float64)
+        for t in range(horizon):
+            at_risk[t] = float(np.sum(te >= t))
+            dead[t] = float(np.sum((ee >= t) & (ee < t + 1.0)))
+        S = np.zeros(horizon, dtype=np.float64)
+        H = 0.0
+        for t in range(horizon):
+            if at_risk[t] > 0:
+                H += dead[t] / at_risk[t]
+            S[t] = float(np.exp(-H))
+        return S.tolist()
+
+    survival: Dict = {}
+    cure_frac: Dict = {}
+    for s in (0, 1, 2, 3, 4):  # 0 = pooled over all stages
+        sname = 'all' if s == 0 else f's{s}'
+        smask = np.ones(stage.shape[0], dtype=bool) if s == 0 else (stage == s)
+        for a, aname in ((1, 'agg'), (0, 'nonagg')):
+            sub = smask & (agg == a)
+            survival[f'{sname}_{aname}'] = _curve(sub)
+            cure_frac.setdefault(sname, {})[aname] = (
+                float(cured[sub].mean()) if sub.any() else float('nan'))
+    return survival, cure_frac

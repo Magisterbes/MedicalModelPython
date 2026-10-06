@@ -110,6 +110,8 @@ _FILE_DESCRIPTIONS = {
     'chart_mortality.csv': 'Mortality rate by age, with and without screening',
     'chart_stages.csv': 'Stage distribution at diagnosis',
     'chart_survival.csv': 'Cause-specific survival',
+    'chart_survival_by_aggressiveness.csv': 'Cause-specific survival by stage and aggressiveness',
+    'table_cure_by_group.csv': 'Cure fraction by stage and aggressiveness',
     'chart_years_saved.csv': 'Years of life saved by screening',
     'chart_diagnosis_rates.csv': 'Diagnosis rate by age',
     'sens_metrics.csv': 'Aggregate metrics for every lead-time factor',
@@ -149,7 +151,8 @@ def _export_single_run(sim, export_dir):
                             os.path.join(export_dir, 'agents.csv'))
     export.write_agents_csv(sim.population, sim.current_date,
                             os.path.join(export_dir, 'agents_cancer.csv'), cancer_only=True)
-    names += export.write_charts_csv(sim.stats.agg_stats, export_dir)
+    names += export.write_charts_csv(sim.stats.agg_stats, export_dir,
+                                     sim.stats.survival_by_group, sim.stats.cure_by_group)
     names.append(export.write_summary_csv(sim.get_summary(), export_dir))
     export.write_meta(export_dir, {
         'kind': 'single_run',

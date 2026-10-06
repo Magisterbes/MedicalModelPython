@@ -129,6 +129,7 @@
         <div class="chart-box"><h3>Mortality (log10 rates)</h3><div id="chart-mortality" style="height:350px"></div></div>
         <div class="chart-box"><h3>Stage Distribution at Diagnosis</h3><div id="chart-stages" style="height:350px"></div></div>
         <div class="chart-box"><h3>Cause-Specific Survival</h3><div id="chart-survival" style="height:350px"></div></div>
+        <div class="chart-box full"><h3>Cause-Specific Survival by Aggressiveness (per stage)</h3><div id="chart-survival-agg" style="height:350px"></div><div id="cure-by-group-table" style="margin-top:10px"></div></div>
         <div class="chart-box full"><h3>Years of Life Saved</h3><div id="chart-years-saved" style="height:300px"></div></div>
     </div>
 
@@ -283,6 +284,20 @@ function renderCharts(stats){
         {x:Array.from({length:20},(_,i)=>i),y:(stats.survival||[]).slice(0,20),type:'scatter',mode:'lines',name:'No Screening',line:{color:'#c62828',width:2}},
         {x:Array.from({length:20},(_,i)=>i),y:(stats.survival_screening||[]).slice(0,20),type:'scatter',mode:'lines',name:'With Screening',line:{color:'#2e7d32',width:2}}
     ],{yaxis:{range:[0,1]},margin:{t:5,r:10,b:40,l:50}},{responsive:true});
+    // Survival by aggressiveness (per stage) + cure-fraction table
+    const sbg=stats.survival_by_group||{}, cbg=stats.cure_by_group||{};
+    const yrs=Array.from({length:30},(_,i)=>i);
+    const aggCol=['#b71c1c','#e53935','#ef5350','#ff8a80'];
+    const nonCol=['#0d47a1','#1e88e5','#42a5f5','#90caf9'];
+    const sTraces=[];
+    for(let s=1;s<=4;s++){
+        const a=sbg['s'+s+'_agg'], n=sbg['s'+s+'_nonagg'];
+        if(a&&a.length)sTraces.push({x:yrs,y:a,type:'scatter',mode:'lines',name:'Stage '+s+' aggressive',line:{color:aggCol[s-1],width:2}});
+        if(n&&n.length)sTraces.push({x:yrs,y:n,type:'scatter',mode:'lines',name:'Stage '+s+' non-aggressive',line:{color:nonCol[s-1],width:2,dash:'dash'}});
+    }
+    if(sTraces.length)Plotly.newPlot('chart-survival-agg',sTraces,{xaxis:{title:'Years after diagnosis',dtick:5},yaxis:{title:'Survival S(t)',range:[0,1]},margin:{t:5,r:10,b:40,l:50}},{responsive:true});
+    const cr=[];for(const s of ['all','s1','s2','s3','s4']){const r=cbg[s];if(!r)continue;cr.push('<tr><td>'+(s==='all'?'All stages':'Stage '+s.slice(1))+'</td><td>'+((r.agg*100).toFixed(1))+'%</td><td>'+((r.nonagg*100).toFixed(1))+'%</td></tr>');}
+    document.getElementById('cure-by-group-table').innerHTML=cr.length?'<table style="font-size:0.85em;border-collapse:collapse;width:100%"><tr><th>Group</th><th>Aggressive cured</th><th>Non-aggressive cured</th></tr>'+cr.join('')+'</table>':'';
     const ys=stats.years_saved||[]; let fy=0,ly=0;
     for(let i=0;i<ys.length;i++){if(ys[i]>0){fy=i;break;}}
     for(let i=ys.length-1;i>=0;i--){if(ys[i]>0){ly=i+5;break;}}

@@ -149,7 +149,9 @@ def _dump_series(export_dir: str, name: str, headers: List[str],
     written.append(name)
 
 
-def write_charts_csv(agg_stats: Dict, export_dir: str) -> List[str]:
+def write_charts_csv(agg_stats: Dict, export_dir: str,
+                     survival_by_group: Dict = None,
+                     cure_by_group: Dict = None) -> List[str]:
     """Write the single-run chart series as tidy CSVs (one file per chart)."""
     written: List[str] = []
 
@@ -188,6 +190,32 @@ def write_charts_csv(agg_stats: Dict, export_dir: str) -> List[str]:
     if diagnosis.size:
         _dump_series(export_dir, 'chart_diagnosis_rates.csv', ['age', 'diagnosis_rate'],
                      [np.arange(diagnosis.size), diagnosis], written)
+
+    if survival_by_group:
+        keys = [k for k in ('all_agg', 'all_nonagg',
+                            's1_agg', 's1_nonagg', 's2_agg', 's2_nonagg',
+                            's3_agg', 's3_nonagg', 's4_agg', 's4_nonagg')
+                if survival_by_group.get(k)]
+        if keys:
+            n = len(next(iter(survival_by_group.values())))
+            _dump_series(export_dir, 'chart_survival_by_aggressiveness.csv',
+                         ['years_since_diagnosis'] + keys,
+                         [np.arange(n)] + [np.asarray(survival_by_group[k], dtype=np.float64)
+                                           for k in keys], written)
+
+    if cure_by_group:
+        rows = []
+        for group in ('all', 's1', 's2', 's3', 's4'):
+            row = cure_by_group.get(group)
+            if row:
+                rows.append([group,
+                             '%.6g' % row.get('agg', float('nan')),
+                             '%.6g' % row.get('nonagg', float('nan'))])
+        if rows:
+            _write_table(os.path.join(export_dir, 'table_cure_by_group.csv'),
+                         ['group', 'aggressive_cure_fraction', 'non_aggressive_cure_fraction'],
+                         rows)
+            written.append('table_cure_by_group.csv')
 
     return written
 
