@@ -28,17 +28,13 @@ def neg_log_likelihood_gompertz(
     stages: np.ndarray,
     initial_V0: float = 0.5,
 ) -> float:
-    """Negative cross-entropy loss for Gompertz model fit.
-    
-    The reduced Gompertz model predicts V(t) = exp(K - exp(C - B_pop * t)).
-    We interpret V(t) as a continuous proxy for stage, and use
-    a Gaussian kernel to convert V(t) to soft class probabilities:
-    
-    p_s = exp(-(V(t) - s)^2 / (2*sigma^2)) / sum_{s'} exp(-(V(t) - s')^2/(2*sigma^2))
-    
-    Then minimize: -sum_i log p_{stage_i}
-    
-    This properly handles ordinal data without assuming continuity/normality.
+    """Calibration loss for the reduced Gompertz growth model.
+
+    The reduced Gompertz model predicts V(t) = exp(K - exp(C - B_pop * t)),
+    interpreted as a continuous proxy for tumour size. The loss fits the Gompertz
+    crossing time of each stage to the mean lead time of the records observed at
+    that stage, with penalties that keep the carrying capacity exp(K) above the
+    terminal stage (4) and the rate B_pop positive.
     
     Parameters
     ----------
@@ -58,44 +54,38 @@ def neg_log_likelihood_gompertz(
         Negative (cross-entropy loss + V0 penalty).
     """
     K, C, B_pop = params[0], params[1], params[2]
-    sigma = 0.8  # Bandwidth for stage probability smoothing
-    two_sigma_sq = 2.0 * sigma * sigma
     
     lead_times = np.asarray(lead_times, dtype=np.float64)
-    stages = np.asarray(stages)
-    n = len(lead_times)
+    stages = np.asarray(stages, dtype=np.int64)
     
-    # Compute V(t) for all observations (vectorized)
-    # V(t) = exp(K - exp(C - B_pop * t))
-    V = np.exp(K - np.exp(C - B_pop * lead_times))
+    # Constraint penalties (large and smooth) to keep the curve well-posed:
+    # the carrying capacity must exceed the terminal stage, and the rate must
+    # be positive, so every stage is reachable at a finite positive time.
+    loss = 0.0
+    if K <= np.log(4.0):
+        loss += 1e6 * (np.log(4.0) - K) ** 2
+    if B_pop <= 0.0:
+        loss += 1e6 * B_pop ** 2
     
-    # Compute V(0) penalty
-    V0 = np.exp(K - np.exp(C))
-    penalty = (V0 - initial_V0) ** 2 * 1.0  # Weight can be adjusted
+    # Calibration: the Gompertz crossing time for each stage should match the
+    # mean lead time of the records observed at that stage
+    # (i.e. lead_time_by_stage_means).
+    for s in (1, 2, 3, 4):
+        mask = stages == s
+        if not mask.any():
+            continue
+        target = float(np.mean(lead_times[mask]))
+        arg = K - np.log(float(s))
+        if arg <= 0.0:
+            loss += 1e6
+            continue
+        t_s = (C - np.log(arg)) / B_pop
+        loss += (t_s - target) ** 2
     
-    # Cross-entropy: for each observation, softmax probabilities
-    # over stages {1, 2, 3, 4} based on squared distance from V.
-    # Fully vectorized over observations -> shape (n, 4).
-    stage_targets = np.array([1.0, 2.0, 3.0, 4.0])
-    dist_sq = (V[:, None] - stage_targets[None, :]) ** 2
-    logits = -dist_sq / two_sigma_sq
-    
-    # Softmax with max trick for numerical stability (per-row max)
-    logits_max = logits.max(axis=1, keepdims=True)
-    probs = np.exp(logits - logits_max)
-    probs = probs / probs.sum(axis=1, keepdims=True)
-    
-    # Gather probability of the observed stage, with floor for safety
-    s_idx = stages.astype(np.intp) - 1
-    valid = (s_idx >= 0) & (s_idx < 4)
-    safe_idx = np.where(valid, s_idx, 0)
-    p_sel = probs[np.arange(n), safe_idx]
-    p_sel = np.where(valid & (p_sel > 1e-300), p_sel, 1e-300)
-    ll = float(np.log(p_sel).sum())
-    
-    # Weighted sum: -LL + penalty
-    # Normalize by n for scale
-    loss = -ll / float(n) + penalty * 0.1
+    # Regularise the carrying capacity toward a plausible value (a few times the
+    # terminal stage) so the fit does not collapse to a degenerate huge-K / tiny-B
+    # solution that matches the crossing times by near-cancellation.
+    loss += (K - np.log(5.0)) ** 2
     
     return loss
 

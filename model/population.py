@@ -43,8 +43,9 @@ class Population:
 
 
 def generate_population(n_agents, init_age_dist_cdf, aging_dist_cdf,
-    diagnose_hazard_values, lead_time_rates, stage_by_age_probs,
-    proportion_aggressive, growth_rate_limits, aggressiveness_rate_threshold,
+    diagnose_hazard_values, lead_time_rate,
+    proportion_aggressive,
+    gompertz_K, gompertz_C, gompertz_B_pop, gompertz_B_std,
     treatment_efficiency, age_cure_constants, aggressiveness_cure_odds_ratio,
     cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length, seed):
     
@@ -87,13 +88,10 @@ def generate_population(n_agents, init_age_dist_cdf, aging_dist_cdf,
     
     _compute_cancer_histories_numba(
         n_agents, has_cancer, pop.diagnosis_age, pop.natural_death_age,
-        pop.date_birth, cancer_seeds, lead_time_rates,
-        np.array(list(stage_by_age_probs.keys()), dtype=np.int32),
-        np.array(list(stage_by_age_probs.values()), dtype=np.float64),
+        pop.date_birth, cancer_seeds, lead_time_rate,
         proportion_aggressive,
-        np.array(growth_rate_limits, dtype=np.float64),
-        aggressiveness_rate_threshold, treatment_efficiency,
-        age_cure_constants,
+        gompertz_K, gompertz_C, gompertz_B_pop, gompertz_B_std,
+        treatment_efficiency, age_cure_constants,
         np.array(aggressiveness_cure_odds_ratio, dtype=np.float64),
         cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length,
         pop.cancer_incidence_age, pop.cancer_diagnose_stage,
@@ -108,11 +106,10 @@ def generate_population(n_agents, init_age_dist_cdf, aging_dist_cdf,
 @njit(cache=True)
 def _compute_cancer_histories_numba(
     n_agents, has_cancer, diagnosis_age, natural_death_age,
-    date_birth, cancer_seeds, lead_time_rates,
-    stage_by_age_keys, stage_by_age_vals,
-    proportion_aggressive, growth_rate_limits,
-    aggressiveness_rate_threshold, treatment_efficiency,
-    age_cure_constants, aggressiveness_cure_odds_ratio,
+    date_birth, cancer_seeds, lead_time_rate,
+    proportion_aggressive,
+    gompertz_K, gompertz_C, gompertz_B_pop, gompertz_B_std,
+    treatment_efficiency, age_cure_constants, aggressiveness_cure_odds_ratio,
     cancer_death_hazard_lambda, reoccurrence_prob, unreal_life_length,
     cancer_incidence_age, cancer_diagnose_stage,
     cancer_is_aggressive, cancer_growth_rate,
@@ -128,49 +125,47 @@ def _compute_cancer_histories_numba(
         nat_death = natural_death_age[i]
         seed = cancer_seeds[i]
         
-        # Stage at diagnosis
-        age_gr = 10 * (diag_age // 10)
-        probs = _get_probs_for_age(age_gr, stage_by_age_keys, stage_by_age_vals)
-        stage = _multinomial_sample(probs, seed) + 1
+        # Individual Gompertz growth rate: B_ind = exp(log(B_pop) + eps), eps ~ N(0, B_std)
+        eps = _normal(seed + 3, gompertz_B_std)
+        b_ind = np.exp(np.log(gompertz_B_pop) + eps)
+        if b_ind < 1e-6:
+            b_ind = 1e-6
+        cancer_growth_rate[i] = b_ind
+        
+        # Lead time: preclinical duration until clinical diagnosis (single rate)
+        ttd = np.ceil(-np.log(max(_uniform(seed + 2), 1e-15)) / lead_time_rate)
+        
+        # Gompertz crossing times for stages 2, 3, 4
+        t2 = _gompertz_time(gompertz_K, gompertz_C, b_ind, 2.0)
+        t3 = _gompertz_time(gompertz_K, gompertz_C, b_ind, 3.0)
+        t4 = _gompertz_time(gompertz_K, gompertz_C, b_ind, 4.0)
+        
+        # Stage at diagnosis = number of thresholds (2, 3, 4) crossed by ttd
+        if t4 <= ttd:
+            stage = 4
+        elif t3 <= ttd:
+            stage = 3
+        elif t2 <= ttd:
+            stage = 2
+        else:
+            stage = 1
         cancer_diagnose_stage[i] = stage
         
-        # Aggressiveness
+        # Aggressiveness (a cure-only label, independent of growth)
         prop_agg = proportion_aggressive[stage - 1]
         is_agg = _bernoulli(prop_agg, seed + 1)
         cancer_is_aggressive[i] = is_agg
         
-        # Lead time
-        lt_rate = lead_time_rates[stage - 1]
-        ttd = np.ceil(-np.log(max(_uniform(seed + 2), 1e-15)) / lt_rate)
-        
-        # Growth rate
-        if ttd > 0:
-            if stage == 1:
-                gamma = np.exp(np.log(stage + _uniform(seed + 3)) / ttd)
-            else:
-                gamma = np.exp(np.log(stage) / ttd)
-        else:
-            gamma = _sample_growth_rate(
-                growth_rate_limits[0], growth_rate_limits[1],
-                aggressiveness_rate_threshold, is_agg, seed + 4)
-        cancer_growth_rate[i] = gamma
-        
-        # Stage ages
+        # Incidence age (onset) back-calculated from diagnosis and lead time
         incidence_age = int(max(diag_age - ttd, 0))
         cancer_incidence_age[i] = incidence_age
         
+        # Stage ages (Gompertz crossing times) and cancer death age
         stages = np.zeros(5, dtype=np.int32)
         stages[0] = incidence_age
-        if gamma > 1.0:
-            log_gamma = np.log(gamma)
-            stages[1] = incidence_age + int(np.log(2.0) / log_gamma)
-            stages[2] = incidence_age + int(np.log(3.0) / log_gamma)
-            stages[3] = incidence_age + int(np.log(4.0) / log_gamma)
-        else:
-            stages[1] = incidence_age + 5
-            stages[2] = incidence_age + 10
-            stages[3] = incidence_age + 15
-        
+        stages[1] = incidence_age + int(t2)
+        stages[2] = incidence_age + int(t3)
+        stages[3] = incidence_age + int(t4)
         delta = -np.log(max(_uniform(seed + 5), 1e-15)) / cancer_death_hazard_lambda
         stages[4] = stages[3] + int(delta)
         cancer_stages_ages[i, :] = stages
@@ -231,38 +226,21 @@ def _bernoulli(p, seed):
 
 
 @njit(cache=True)
-def _multinomial_sample(probs, seed):
-    u = _uniform(seed)
-    cumsum = 0.0
-    for j in range(len(probs)):
-        cumsum += probs[j]
-        if u < cumsum:
-            return j
-    return len(probs) - 1
+def _normal(seed, sigma):
+    """Standard normal (Box-Muller) scaled by sigma, from two uniform draws."""
+    u1 = max(_uniform(seed), 1e-15)
+    u2 = _uniform(seed + 1)
+    r = np.sqrt(-2.0 * np.log(u1))
+    return r * np.cos(2.0 * np.pi * u2) * sigma
 
 
 @njit(cache=True)
-def _get_probs_for_age(age_gr, keys, vals):
-    best_key = keys[0]
-    best_dist = abs(age_gr - keys[0])
-    for k in range(1, len(keys)):
-        d = abs(age_gr - keys[k])
-        if d < best_dist:
-            best_dist = d
-            best_key = keys[k]
-    for k in range(len(keys)):
-        if keys[k] == best_key:
-            return vals[k]
-    return vals[0]
-
-
-@njit(cache=True)
-def _sample_growth_rate(low, up, threshold, is_agg, seed):
-    u = _uniform(seed)
-    if is_agg:
-        return low + (1.0 - threshold) * (up - low) * u
-    else:
-        return low + (1.0 - threshold) * (up - low) + threshold * (up - low) * u
+def _gompertz_time(K, C, b_ind, size):
+    """Years since onset when the Gompertz tumour reaches `size`."""
+    arg = K - np.log(size)
+    if arg <= 0.0:
+        return 1e9  # unreachable at this carrying capacity
+    return (C - np.log(arg)) / b_ind
 
 
 @njit(cache=True)
@@ -290,6 +268,7 @@ def apply_screening_batch(n_agents, is_alive, ages, has_cancer,
     
     screening_detected = np.zeros(n_agents, dtype=np.int8)
     fp_count = 0
+    n_tests = 0
     
     for i in range(n_agents):
         if not is_alive[i]:
@@ -307,6 +286,8 @@ def apply_screening_batch(n_agents, is_alive, ages, has_cancer,
         
         if _uniform(bseed + 1) >= participation_rate:
             continue
+        
+        n_tests += 1
         
         if has_cancer[i] and cancer_incidence_age[i] < a:
             if _bernoulli(test_tp, bseed + 2):
@@ -337,7 +318,7 @@ def apply_screening_batch(n_agents, is_alive, ages, has_cancer,
             if _bernoulli(test_tp * 0.1, bseed + 6):
                 fp_count += 1
     
-    return fp_count, screening_detected
+    return fp_count, screening_detected, n_tests
 
 
 @njit(cache=True)

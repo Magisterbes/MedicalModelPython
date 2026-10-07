@@ -30,8 +30,6 @@ lead_time_by_stage_means = [1.0, 3.0, 4.0, 5.0]
 [natural_history]
 reoccurrence_probability = 0.2
 treatment_mortality_adjustment = 1.0
-aggressiveness_rate_threshold = 0.2
-growth_rate_limits = [1.5, 4.0]
 
 [treatment]
 treatment_efficiency = [0.7, 0.3, 0.2, 0.2]

@@ -35,6 +35,11 @@ class StatsCollection:
         # aggressiveness (filled in gather_stats).
         self.survival_by_group: Dict = {}
         self.cure_by_group: Dict = {}
+        # Minimal economics (filled in gather_stats / iterate_year).
+        self.screening_tests = 0
+        self.screening_cost = 0.0
+        self.treatment_cost = 0.0
+        self.total_cost = 0.0
 
     def gather_stats(self, population, params, current_date):
         pop = population
@@ -118,6 +123,18 @@ class StatsCollection:
                         ys[:] += np.bincount(inc2[vy], weights=yrs[vy],
                                              minlength=ys.shape[0])[:ys.shape[0]]
 
+        # Minimal cost summary: screening tests + treatment by stage.
+        cured = pop.cancer_is_cured | pop.cancer_is_screening_cured
+        stage = pop.cancer_diagnose_stage.astype(np.int64)
+        treatment = 0.0
+        for s in range(4):
+            m = cured & (stage == s + 1)
+            if m.any():
+                treatment += float(m.sum()) * float(params.stage_treatment_price[s])
+        self.treatment_cost = treatment
+        self.screening_cost = float(self.screening_tests) * float(params.test_per_person_price)
+        self.total_cost = self.screening_cost + self.treatment_cost
+
         self._gather_calc()
 
     def _gather_calc(self):
@@ -133,6 +150,10 @@ class StatsCollection:
         d = {k: v.tolist() if isinstance(v, np.ndarray) else v for k, v in self.agg_stats.items()}
         d['survival_by_group'] = self.survival_by_group
         d['cure_by_group'] = self.cure_by_group
+        d['screening_tests'] = self.screening_tests
+        d['screening_cost'] = self.screening_cost
+        d['treatment_cost'] = self.treatment_cost
+        d['total_cost'] = self.total_cost
         return d
 
 

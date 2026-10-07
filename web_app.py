@@ -388,8 +388,9 @@ def api_parameters():
         'screening_frequency': p.frequency,
         'screening_date': p.screening_date,
         'reoccurrence_prob': p.reoccurrence_probability,
-        'growth_rate_limits': p.growth_rate_limits,
-        'aggressiveness_threshold': p.aggressiveness_rate_threshold,
+        'test_per_person_price': p.test_per_person_price,
+        'screening_price': p.screening_price,
+        'stage_treatment_price': p.stage_treatment_price,
         'gompertz': p.reduced_gompertz,
     })
 
@@ -662,8 +663,6 @@ def api_save_params():
         'test_fp_selected': p.test_fp_selected,
         'participation_rate': p.participation_rate,
         'gompertz': p.reduced_gompertz,
-        'growth_rate_limits': p.growth_rate_limits,
-        'aggressiveness_threshold': p.aggressiveness_rate_threshold,
         'reoccurrence_prob': p.reoccurrence_probability,
         'screening_start': p.start_age,
         'screening_finish': p.finish_age,
@@ -741,12 +740,17 @@ def _apply_overrides(p, data):
         p.reduced_gompertz = values
         p.gompertz.K, p.gompertz.C, p.gompertz.B_pop, p.gompertz.B_std = (
             values[0], values[1], values[2], values[3])
-    if 'growth_rate_limits' in data:
-        p.growth_rate_limits = list(data['growth_rate_limits'])
-    if 'aggressiveness_threshold' in data:
-        p.aggressiveness_rate_threshold = float(data['aggressiveness_threshold'])
     if 'reoccurrence_prob' in data:
         p.reoccurrence_probability = float(data['reoccurrence_prob'])
+    if 'test_per_person_price' in data:
+        p.test_per_person_price = float(data['test_per_person_price'])
+    if 'screening_price' in data:
+        p.screening_price = float(data['screening_price'])
+    if 'stage_treatment_price' in data:
+        v = data['stage_treatment_price']
+        if not isinstance(v, (list, tuple)):
+            v = [v] * 4
+        p.stage_treatment_price = [float(x) for x in v][:4]
     # Screening settings — accept both the UI keys and the canonical ones
     start_age = data.get('screening_start', data.get('screening_start_age'))
     if start_age is not None:

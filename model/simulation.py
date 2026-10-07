@@ -124,19 +124,16 @@ class Simulation:
         rng = get_random()
         cancer_death_lambda = np.exp(self.params.cancer_death_hazard.constants[0])
         
+        gomp = self.params.gompertz
         self.population = generate_population(
             n_agents=self.params.init_population,
             init_age_dist_cdf=self.params.init_age_dist.cdf,
             aging_dist_cdf=self.params.aging_dist.cdf,
             diagnose_hazard_values=self.params.diagnose_hazard.value_by_age,
-            lead_time_rates=np.array(self.params.lead_time_distributions),
-            stage_by_age_probs=self.params.stage_by_age_reg_generator,
+            lead_time_rate=1.0 / float(np.mean(self.params.lead_time_by_stage_means)),
             proportion_aggressive=self.params.proportion_of_aggressive,
-            growth_rate_limits=(
-                self.params.growth_rate_limits[0],
-                self.params.growth_rate_limits[1],
-            ),
-            aggressiveness_rate_threshold=self.params.aggressiveness_rate_threshold,
+            gompertz_K=gomp.K, gompertz_C=gomp.C,
+            gompertz_B_pop=gomp.B_pop, gompertz_B_std=gomp.B_std,
             treatment_efficiency=np.array(self.params.treatment_efficiency),
             age_cure_constants=np.array(self.params.age_cure_constants),
             aggressiveness_cure_odds_ratio=np.array(
@@ -177,7 +174,7 @@ class Simulation:
         if screening_period:
             # Truncate seed to int32 for numba compatibility
             safe_seed = np.int32(get_random().seed & 0x7FFFFFFF) + np.int32(current_date * 10000)
-            fp_count, _ = apply_screening_batch(
+            fp_count, _, n_tests = apply_screening_batch(
                 n_agents=pop.n_agents,
                 is_alive=pop.is_alive,
                 ages=ages,
@@ -201,6 +198,7 @@ class Simulation:
                 seed_param=safe_seed,
             )
             stats.agg_stats['false_positives'][current_date] += fp_count
+            stats.screening_tests += n_tests
         
         # Second pass: statistics for alive agents (vectorized via np.bincount)
         still_alive = pop.is_alive
@@ -278,4 +276,8 @@ class Simulation:
             "n_screening_detected": int(pop.cancer_screening_found.sum()),
             "years_simulated": self.current_date,
             "random_seed": get_random().seed,
+            "n_screening_tests": int(self.stats.screening_tests),
+            "screening_cost": round(float(self.stats.screening_cost), 2),
+            "treatment_cost": round(float(self.stats.treatment_cost), 2),
+            "total_cost": round(float(self.stats.total_cost), 2),
         }

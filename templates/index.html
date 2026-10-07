@@ -265,7 +265,9 @@ function showSummary(summary){
     const cards=[{l:'Agents',v:summary.n_agents},{l:'Cancer Cases',v:summary.n_cancer_cases},
         {l:'Cured Clinical',v:summary.n_cured_clinical},{l:'Cured Screening',v:summary.n_cured_screening},
         {l:'Screening Detected',v:summary.n_screening_detected},{l:'Alive at End',v:summary.n_alive_end},
-        {l:'Years Simulated',v:summary.years_simulated},{l:'Random Seed',v:summary.random_seed}];
+        {l:'Years Simulated',v:summary.years_simulated},{l:'Random Seed',v:summary.random_seed},
+        {l:'Screening Tests',v:summary.n_screening_tests},{l:'Screening Cost',v:summary.screening_cost},
+        {l:'Treatment Cost',v:summary.treatment_cost},{l:'Total Cost',v:summary.total_cost}];
     cards.forEach(c=>{ g.innerHTML+=`<div class="summary-card"><div class="value">${c.v?.toLocaleString?.()||c.v||'-'}</div><div class="label">${c.l}</div></div>`; });
 }
 
@@ -346,7 +348,7 @@ function loadParamsFromServer(){
                 {id:'gompertz_C',l:'C',v:gp(gGom,1),h:H_C},
                 {id:'gompertz_B_pop',l:'B_pop',v:gp(gGom,2),h:H_BPOP},
                 {id:'gompertz_B_std',l:'B_std',v:gp(gGom,3),h:H_BSTD}]},
-            {n:'Other',d:'Parameters that are stored and exported but do not drive the simulation engine in the current version.',f:[{id:'growth_rate_limits',l:'Growth rate limits (2)',v:fmtArr(data.growth_rate_limits),h:'Only used in the unreachable ttd=0 branch: the lead-time draw makes ttd>=1 in practice, so the per-agent growth rate is exp(log(stage)/ttd) and these limits do not change results.'},{id:'aggressiveness_threshold',l:'Aggressiveness threshold',v:fmt5(data.aggressiveness_threshold),h:'Only used in that same unreachable branch. The aggressiveness label is drawn from proportion_of_aggressive by stage, so this threshold does not change results.'},{id:'reoccurrence_prob',l:'Reoccurrence prob',v:fmt5(data.reoccurrence_prob),h:'Draws the exported cancer_reoccurred flag only; recurrence does not feed back into survival, deaths or costs.'}]},
+            {n:'Economics',d:'Cost parameters: cost per screening test, programme cost per screening, and treatment cost by stage (I-IV).',f:[{id:'test_per_person_price',l:'Test price',v:fmt5(data.test_per_person_price)},{id:'screening_price',l:'Screening price',v:fmt5(data.screening_price)},{id:'stage_treatment_price',l:'Treatment price (4)',v:fmtArr(data.stage_treatment_price)}]},
         ];
         html += groups.map(g=>`<div class="param-group"><h4>${g.n}${g.d?hintIcon(g.d):''}</h4>${g.f.map(f=>`<div class="param-row"><label>${f.l}${f.h?hintIcon(f.h,'hint-inline'):''}</label><input name="${f.id}" value="${f.v??''}" style="width:${(f.v??'').toString().length>20?200:120}px"></div>`).join('')}</div>`).join('');
         grid.innerHTML = html;

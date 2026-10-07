@@ -78,8 +78,6 @@ class Parameters:
     # ---- Natural history ----
     reoccurrence_probability: float = 0.2  # draws the exported flag only; no effect on survival/deaths/costs
     treatment_mortality_adjustment: float = 1.0
-    aggressiveness_rate_threshold: float = 0.2  # only in the unreachable ttd==0 branch
-    growth_rate_limits: List[float] = field(default_factory=lambda: [1.5, 4.0])  # only in the unreachable ttd==0 branch
     
     # ---- Treatment parameters ----
     treatment_efficiency: List[float] = field(default_factory=lambda: [0.7, 0.3, 0.2, 0.2])
@@ -127,11 +125,6 @@ class Parameters:
     # Lead time distributions (exponential scales)
     lead_time_distributions: Optional[List[float]] = None
     
-    # Stage-by-age regression
-    stage_by_age_reg_generator: Optional[Dict[int, np.ndarray]] = None  # age_group -> multinomial probs
-    stage_by_age_generator: Optional[Dict[int, np.ndarray]] = None
-    progression_regression: Optional[np.ndarray] = None
-    
     # Proportion of aggressive by stage
     proportion_of_aggressive: Optional[np.ndarray] = None
     
@@ -154,7 +147,6 @@ class Parameters:
         self.treatment_efficiency = list(self.treatment_efficiency)
         self.age_cure_constants = list(self.age_cure_constants)
         self.aggressiveness_cure_odds_ratio = list(self.aggressiveness_cure_odds_ratio)
-        self.growth_rate_limits = list(self.growth_rate_limits)
     
     @classmethod
     def from_toml(cls, path: str) -> 'Parameters':
@@ -391,11 +383,6 @@ class Parameters:
         
         logger.info(f"Loaded {len(df)} individual records.")
         
-        # Train stage-by-age regression
-        logger.info("Training multinomial logistic regression for stage-by-age...")
-        staging_reg = self._get_model(df)
-        self._get_stage_by_age_reg_generator(staging_reg, df)
-        
         # Train a single Gompertz model on all staging records (one model for all).
         logger.info("Training Gompertz model...")
         
@@ -405,53 +392,6 @@ class Parameters:
         self.proportion_of_aggressive = self._get_aggressiveness_distribution(df)
         
         logger.info("Staging data training complete.")
-    
-    def _get_model(self, df: pd.DataFrame) -> np.ndarray:
-        """Train multinomial logistic regression for stage prediction by age.
-        Returns weights in C#-compatible format: (n_features+1, 4) with bias in last row.
-        """
-        ages = df['Age'].values
-        stages = df['Stage'].values.astype(int)
-        n, n_classes = len(ages), 4
-        
-        train_X = np.array([_get_age_group_vector(a) for a in ages])
-        
-        # Train sklearn multinomial logistic regression (L-BFGS, fast ~0.1s)
-        model = LogisticRegression(solver='lbfgs', C=1.0, max_iter=1000, random_state=42)
-        model.fit(train_X, stages - 1)
-        
-        # Extract weights in C# format: (n_features + 1, n_classes), bias in last row
-        weights = np.zeros((train_X.shape[1] + 1, n_classes), dtype=np.float64)
-        weights[:train_X.shape[1], :] = model.coef_.T
-        weights[train_X.shape[1], :] = model.intercept_
-        return weights
-    
-    def _get_stage_by_age_reg_generator(self, reg: np.ndarray, df: pd.DataFrame):
-        """Build stage-by-age multinomial generators.
-        
-        Equivalent to C# Parameters.GetStageByAgeRegGenerator().
-        """
-        self.stage_by_age_reg_generator = {}
-        
-        min_gr = _get_age_group(df['Age'].min())
-        max_gr = _get_age_group(df['Age'].max())
-        nf = reg.shape[0] - 1  # number of features (bias in last row)
-        
-        for i in range(12):
-            age_gr = i * 10
-            gr_vec = _get_age_group_vector(age_gr)
-            
-            # Clamp to data range
-            if age_gr <= min_gr:
-                gr_vec = _get_age_group_vector(min_gr)
-            if age_gr >= max_gr:
-                gr_vec = _get_age_group_vector(max_gr)
-            
-            # Compute softmax probabilities from weight matrix
-            scores = gr_vec @ reg[:nf, :] + reg[nf, :]
-            exp_s = np.exp(scores - np.max(scores))
-            probs = exp_s / exp_s.sum()
-            self.stage_by_age_reg_generator[age_gr] = probs
     
     def _get_gompertz_model(self) -> GompertzModel:
         """Initialise the single Gompertz model from the configured starting point.
@@ -514,35 +454,6 @@ class Parameters:
         elif name in self.age_irrelevant_factors_rr:
             return self.age_irrelevant_factors_rr[name]
         return 1.0
-    
-    def sample_stage_by_age(self, age: int) -> int:
-        """Sample a clinical stage given age, using the trained regression.
-        
-        Returns stage (1-indexed: 1, 2, 3, or 4).
-        
-        Equivalent to C# stageByAgeRegGenerator[ageGroup].Sample() + IndexOf(1).
-        """
-        age_gr = _get_age_group(age)
-        if self.stage_by_age_reg_generator is None:
-            return 1  # fallback
-        
-        # Get probs for the nearest age group
-        available_groups = sorted(self.stage_by_age_reg_generator.keys())
-        # Find closest
-        closest = min(available_groups, key=lambda g: abs(g - age_gr))
-        probs = self.stage_by_age_reg_generator[closest]
-        
-        # Multinomial sample
-        from .random import get_random
-        rng = get_random()
-        u = rng.next_double()
-        cumsum = 0.0
-        for s in range(len(probs)):
-            cumsum += probs[s]
-            if u < cumsum:
-                return s + 1
-        
-        return len(probs)  # last stage
 
 
 def _csharp_to_python_name(csharp_name: str) -> str:
