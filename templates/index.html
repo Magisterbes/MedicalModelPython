@@ -289,17 +289,23 @@ function renderCharts(stats){
     // Survival by aggressiveness (per stage) + cure-fraction table
     const sbg=stats.survival_by_group||{}, cbg=stats.cure_by_group||{};
     const yrs=Array.from({length:30},(_,i)=>i);
-    const aggCol=['#b71c1c','#e53935','#ef5350','#ff8a80'];
-    const nonCol=['#0d47a1','#1e88e5','#42a5f5','#90caf9'];
+    // One colour per stage; aggressiveness is distinguished by line style
+    // (solid = aggressive, dashed = non-aggressive).
+    const stageCol=['#1f77b4','#ff7f0e','#2ca02c','#d62728'];
     const sTraces=[];
     for(let s=1;s<=4;s++){
         const a=sbg['s'+s+'_agg'], n=sbg['s'+s+'_nonagg'];
-        if(a&&a.length)sTraces.push({x:yrs,y:a,type:'scatter',mode:'lines',name:'Stage '+s+' aggressive',line:{color:aggCol[s-1],width:2}});
-        if(n&&n.length)sTraces.push({x:yrs,y:n,type:'scatter',mode:'lines',name:'Stage '+s+' non-aggressive',line:{color:nonCol[s-1],width:2,dash:'dash'}});
+        if(a&&a.length)sTraces.push({x:yrs,y:a,type:'scatter',mode:'lines',name:'Stage '+s+' aggressive',legendgroup:'stage'+s,line:{color:stageCol[s-1],width:2,dash:'solid'}});
+        if(n&&n.length)sTraces.push({x:yrs,y:n,type:'scatter',mode:'lines',name:'Stage '+s+' non-aggressive',legendgroup:'stage'+s,line:{color:stageCol[s-1],width:2,dash:'dash'}});
     }
-    if(sTraces.length)Plotly.newPlot('chart-survival-agg',sTraces,{xaxis:{title:'Years after diagnosis',dtick:5},yaxis:{title:'Survival S(t)',range:[0,1]},margin:{t:5,r:10,b:40,l:50}},{responsive:true});
-    const cr=[];for(const s of ['all','s1','s2','s3','s4']){const r=cbg[s];if(!r)continue;cr.push('<tr><td>'+(s==='all'?'All stages':'Stage '+s.slice(1))+'</td><td>'+((r.agg*100).toFixed(1))+'%</td><td>'+((r.nonagg*100).toFixed(1))+'%</td></tr>');}
-    document.getElementById('cure-by-group-table').innerHTML=cr.length?'<table style="font-size:0.85em;border-collapse:collapse;width:100%"><tr><th>Group</th><th>Aggressive cured</th><th>Non-aggressive cured</th></tr>'+cr.join('')+'</table>':'';
+    if(sTraces.length)Plotly.newPlot('chart-survival-agg',sTraces,{xaxis:{title:'Years after diagnosis',dtick:5},yaxis:{title:'Survival S(t)',range:[0,1]},margin:{t:5,r:10,b:40,l:110},legend:{title:{text:'solid = aggressive<br>dashed = non-aggressive',font:{size:10}}}},{responsive:true});
+    const cellL='padding:5px 16px;border-bottom:1px solid #e6e6e6;text-align:left;white-space:nowrap;';
+    const cellR='padding:5px 16px;border-bottom:1px solid #e6e6e6;text-align:right;white-space:nowrap;';
+    const headL='padding:6px 16px;text-align:left;border-bottom:2px solid #1a237e;white-space:nowrap;';
+    const headR='padding:6px 16px;text-align:right;border-bottom:2px solid #1a237e;white-space:nowrap;';
+    let cr='';
+    for(const s of ['all','s1','s2','s3','s4']){const r=cbg[s];if(!r)continue;cr+='<tr><td style="'+cellL+'">'+(s==='all'?'All stages':'Stage '+s.slice(1))+'</td><td style="'+cellR+'">'+((r.agg*100).toFixed(1))+'%</td><td style="'+cellR+'">'+((r.nonagg*100).toFixed(1))+'%</td></tr>';}
+    document.getElementById('cure-by-group-table').innerHTML=cr?'<div style="overflow-x:auto"><table style="font-size:0.85em;border-collapse:collapse;margin:0 auto"><thead><tr><th style="'+headL+'">Group</th><th style="'+headR+'">Aggressive cured</th><th style="'+headR+'">Non-aggressive cured</th></tr></thead><tbody>'+cr+'</tbody></table></div>':'';
     const ys=stats.years_saved||[]; let fy=0,ly=0;
     for(let i=0;i<ys.length;i++){if(ys[i]>0){fy=i;break;}}
     for(let i=ys.length-1;i>=0;i--){if(ys[i]>0){ly=i+5;break;}}
