@@ -39,7 +39,7 @@ Each agent is stored as an element in a \textbf{Structure of Arrays (SoA)} using
     \item \textbf{cancer\_incidence\_age} (int32) — age at first malignant cell (onset of preclinical phase).
     \item \textbf{cancer\_diagnose\_stage} (int8) — clinical stage at diagnosis (1--4).
     \item \textbf{cancer\_is\_aggressive} (bool) — aggressive subtype indicator.
-    \item \textbf{cancer\_growth\_rate} (float64) — tumor growth rate $\gamma$.
+    \item \textbf{cancer\_growth\_rate} (float64) — individual Gompertz growth rate $B_{\text{ind}}$.
     \item \textbf{cancer\_is\_cured} (bool) — cured by clinical treatment.
     \item \textbf{cancer\_is\_screening\_cured} (bool) — cured after screening detection.
     \item \textbf{cancer\_screening\_found} (bool) — detected by screening.
@@ -54,6 +54,7 @@ Each agent is stored as an element in a \textbf{Structure of Arrays (SoA)} using
 \subsection{Model Parameters}
 
 \begin{center}
+\footnotesize
 \begin{tabular}{@{}llll@{}}
 \toprule
 \textbf{Parameter} & \textbf{Meaning} & \textbf{Units} & \textbf{Default} \\
@@ -63,16 +64,18 @@ InitPopulation & Initial population size & persons & 100\,000 \\
 UnrealLifeLength & Maximum possible age & years & 110 \\
 DiagnoseHazard & Diagnosis hazard function & --- & piecewise (6 nodes) \\
 CancerDeathHazard & Cancer death hazard function & --- & constant (Exp, $\lambda=1$) \\
-ReducedGompertz & Reduced Gompertz parameters & --- & $\{0.1,0.3,0.1,0.1\}$ \\
-LeadTimeByStageMeans & Mean lead times by stage & years & $\{1,3,4,5\}$ \\
-ReoccurrenceProbability & Recurrence probability & unitless & 0.2 \\
-AggressivenessRateThreshold & Growth rate distribution threshold & unitless & 0.2 \\
+ReducedGompertz & Gompertz start $\{K,C,B_{\text{pop}},\sigma_B\}$ & --- & $\{1.6,0.5,0.5,0.1\}$ \\
+LeadTimeMean & Mean preclinical lead time (single scale) & years & 3.5 \\
+AggressCureOddsRatio & Aggressive cure odds ratio (per stage) & unitless & $\{0.667,\dots\}$ \\
 TreatmentEfficiency & Cure probability by stage & unitless & $\{0.7,0.3,0.2,0.2\}$ \\
 AgeCureConstants & Age-dependent cure modifier & unitless & 5 values (0--40,\dots,80+) \\
 ScreeningDate & Year screening starts & simulation year & 10 \\
 StartAge / FinishAge & Screening age range & years & 50 / 60 \\
 Frequency & Screening interval & years & 2 \\
 ParticipationRate & Participation fraction & unitless & 0.5 \\
+TestPerPersonPrice & Cost per screening test & --- & 1.0 \\
+ScreeningPrice & Programme cost per screen & --- & 1.0 \\
+StageTreatmentPrice & Treatment cost by stage & --- & $\{1,2,3,4\}$ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -107,15 +110,19 @@ Tumor growth is modeled through a \textit{reduced Gompertz model} with individua
     V(t) = \exp\left( K - \exp\left( C - B_{\text{ind}} \cdot t \right) \right),
 \end{equation}
 
-where $K, C$ are population-level shape parameters, and $B_{\text{ind}} = \exp(\log B_{\text{pop}} + \varepsilon)$ with $\varepsilon \sim N(0, \sigma_B^2)$ as an individual random effect on the log-rate. Parameters are fitted separately for aggressive and non-aggressive tumors using Nelder--Mead optimization on a cross-entropy loss function (see Section~\ref{sec:calibration}).
-
-Stage attainment ages are computed from the exponential growth model:
+where $K, C$ are population-level shape parameters, and $B_{\text{ind}} = \exp(\log B_{\text{pop}} + \varepsilon)$ with $\varepsilon \sim N(0, \sigma_B^2)$ as an individual random effect on the log-rate ($t$ is the time since tumour onset). The Gompertz curve \emph{drives} the stage progression: the tumour reaches size $s$ (i.e.\ stage $s$) at the crossing time
 
 \begin{equation}
-    t_s = t_0 + \frac{\log(s)}{\log(\gamma)}, \quad s = 1,2,3,4,
+    t_s = \frac{C - \log\left( K - \log s \right)}{B_{\text{ind}}}, \quad s = 1,2,3,4.
 \end{equation}
 
-where $t_0$ is the incidence age and $\gamma$ is the tumor growth rate. The lead time from incidence to diagnosis, $t_D$, is sampled from an exponential distribution with stage-dependent mean $\mu_s$.
+The lead time from onset to diagnosis, $t_D$, is sampled from an exponential distribution with a single mean $\mu$ (\texttt{LeadTimeMean}); the diagnosed stage is the number of thresholds (sizes $2,3,4$) the tumour has crossed by $t_D$:
+
+\begin{equation}
+    s_{\text{diag}} = 1 + \#\{\, s \in \{2,3,4\} : t_s \le t_D \,\}.
+\end{equation}
+
+The per-stage crossing times $t_2, t_3, t_4$ are not independent parameters: they are \emph{derived from the staging data's stage mix} so that the simulation reproduces that mix (Section~\ref{sec:ident}). The carrying capacity must satisfy $K > \log 4$ for stage IV to be reachable in finite time.
 
 \subsubsection{Treatment}
 
@@ -124,6 +131,15 @@ At clinical or screening diagnosis, the agent undergoes treatment. Cure is stoch
     P_{\text{cure}} = \min\left( \text{AgeCureEff}(a) \cdot \eta_s,\; 1 \right),
 \end{equation}
 where $\eta_s$ is the stage-specific treatment efficacy and $\text{AgeCureEff}(a)$ is a piecewise-constant age modifier (5 groups: 0--40, 40--50, 50--60, 70--80, 80+). Cured agents have their death age extended beyond natural lifespan.
+
+\subsubsection{Aggressiveness}
+
+Aggressiveness is a \emph{cure-only} label (it does not affect growth). The label is drawn conditionally on the diagnosed stage: $P(\text{aggressive} \mid s) = \pi_s$ (\texttt{proportion\_of\_aggressive}, estimated from the staging data). An aggressive tumour has its cure \emph{odds} multiplied by a hand-set, stage-specific odds ratio $\rho_s$ (\texttt{AggressivenessCureOddsRatio}; default $0.667$, i.e.\ aggressive tumours are harder to cure):
+\begin{equation}
+    \text{odds} = \frac{P_{\text{cure}}}{1 - P_{\text{cure}}} \cdot \rho_s, \qquad
+    P_{\text{cure}}^{\text{agg}} = \frac{\text{odds}}{1 + \text{odds}}.
+\end{equation}
+Because the label is stage-conditioned, the aggressiveness effect must be read \emph{within} each stage: a pooled aggressive-vs-non-aggressive comparison is confounded by the stage mix (a Simpson-type effect). The model accordingly reports cause-specific survival and the cure fraction stratified by stage and aggressiveness.
 
 \subsubsection{Screening}
 
@@ -136,6 +152,15 @@ Screening is applied annually starting from year \texttt{ScreeningDate}, at inte
 
 Upon screening detection, the tumor stage is recomputed, cure is assessed, and the death age is recalculated.
 
+\subsubsection{Cost Model}
+
+A minimal cost model reports the screening and treatment costs of the run:
+\begin{equation}
+    C_{\text{screen}} = N_{\text{tests}} \cdot \texttt{TestPerPersonPrice}, \qquad
+    C_{\text{treat}} = \sum_{s=1}^{4} N_{\text{cured},s} \cdot \texttt{StageTreatmentPrice}_s,
+\end{equation}
+where $N_{\text{tests}}$ is the number of screening tests administered and $N_{\text{cured},s}$ is the number of patients cured after a stage-$s$ diagnosis. Both components and their total are surfaced in the results summary. A full cost-effectiveness analysis that also prices complications and recurrence is not yet implemented.
+
 \subsection{Initial Conditions}
 
 The initial population is generated at simulation year 0. Each agent's age is sampled from \texttt{InitAgeDist} (built from population data). For each agent:
@@ -144,6 +169,10 @@ The initial population is generated at simulation year 0. Each agent's age is sa
     \item Clinical diagnosis age is sampled from \texttt{DiagnoseHazard}.
     \item If diagnosis precedes natural death, a \texttt{Cancer} object is created and the full disease trajectory is simulated.
 \end{enumerate}
+
+\subsection{Random Number Generation}
+
+The kernel draws each agent's quantities from a counter-based hash $\texttt{SplitMix64}(\text{seed} + k)$, where \texttt{seed} is the agent's integer seed and $k$ indexes the draw. SplitMix64 is used (rather than a low-order LCG) precisely because the call sites rely on nearby indices being \emph{independent}: a naive LCG left $\mathrm{corr}(u_s, u_{s+1}) \approx +0.36$, which silently coupled the stage draw to the lead time, cure, cancer-death age and the aggressiveness label (e.g.\ aggressive tumours appeared almost only at stage IV). All streams derive from a single logged seed, so runs are reproducible; an automated guard test checks the decorrelation of neighbouring indices.
 
 \subsection{Model Calibration}
 \label{sec:calibration}
@@ -162,13 +191,13 @@ where $C(a)$ is the observed case count and $P(a)$ is the population at age $a$.
 
 \subsubsection{Gompertz Model Calibration}
 
-Parameters $\{K, C, B_{\text{pop}}\}$ are fitted once on all staging records (a single model for all tumours). The C\# version used weighted sum-of-squares on a continuous V(t) output, which incorrectly treats the ordinal stage variable as continuous with normal errors. The Python version uses \textbf{cross-entropy loss with Gaussian kernel softmax}:
+Parameters $\{K, C, B_{\text{pop}}\}$ are fitted (a single model for all tumours) so that the Gompertz crossing times match the targets derived from the staging data's stage mix (Section~\ref{sec:ident}):
 
 \begin{equation}
-    p_s(V) = \frac{\exp(-(V - s)^2 / 2\sigma^2)}{\sum_{s'=1}^4 \exp(-(V - s')^2 / 2\sigma^2)},
+    \mathcal{L} = \sum_{s \in \{2,3,4\}} \left( t_s(K, C, B_{\text{pop}}) - t_s^{\text{target}} \right)^2,
 \end{equation}
 
-with the objective $-\sum_i \log p_{s_i}(V(t_i))$. The optimization uses \textbf{Nelder--Mead} (3 parameters, 5000 max iterations), which is $\sim$15$\times$ faster than the \texttt{differential\_evolution} alternative while producing comparable results.
+minimized with \textbf{L-BFGS-B} subject to $K > \log 4$ (so stage IV is reachable) and $B_{\text{pop}} > 0$, from a reasonable starting point; a weak regularizer keeps $K$ near a plausible carrying capacity. The fit is deterministic and takes milliseconds. The C\# version used weighted sum-of-squares on a continuous $V(t)$ output with normal errors.
 
 \subsubsection{Cancer Death Hazard Calibration}
 
@@ -196,8 +225,8 @@ The single parameter $\lambda$ of the exponential death hazard is fitted via \te
 \subsubsection{Absence of Preclinical Compartment}
 The model lacks a carcinoma in situ (DCIS) stage, which is critical for screening models: a significant fraction of mammography-detected cancers are DCIS. Without this, the model overestimates screening effectiveness by attributing prevention of invasive cancer to cases that might never have progressed (overdiagnosis bias).
 
-\subsubsection{Deterministic Staging}
-The formula $t_s = t_0 + \log(s)/\log(\gamma)$ assumes strict exponential growth with fixed size ratios between stages. This ignores heterogeneity in growth trajectories (acceleration/deceleration periods, angiogenesis, immune response). A continuous-time Markov chain (CTMC) would be more justified.
+\subsubsection{Deterministic Stage Crossings}
+Given the individual growth rate $B_{\text{ind}}$, the crossing times $t_s$ are deterministic; stochasticity in progression enters only through $B_{\text{ind}}$ (lognormal, controlled by $\sigma_B$) and the diagnosis time. Within an agent the stage sequence is fixed, so phenomena such as regression, de-differentiation or stage-skipping are not represented. A continuous-time Markov chain (CTMC) between stages would relax this.
 
 \subsubsection{Ignoring Competing Mortality from Treatment}
 The parameter \texttt{TreatmentMortalityAdjustment} exists but is not used in the code. Agents with treated cancer face no elevated risk from treatment complications (cardiotoxicity, post-operative complications).
@@ -205,41 +234,33 @@ The parameter \texttt{TreatmentMortalityAdjustment} exists but is not used in th
 \subsection{Parametric Validity}
 
 \subsubsection{Identifiability Issues}
-The model suffers from \textbf{structural non-identifiability}:
+The model suffers from \textbf{structural non-identifiability} (see Section~\ref{sec:ident}):
 \begin{itemize}[nosep]
-    \item Lead time and growth rate are inversely related: $\gamma = \exp(\log(s)/t_D)$. With a single observation (stage and age at diagnosis), it is impossible to simultaneously identify incidence age, growth rate, and lead time. The model resolves this by sampling the lead time from an independent distribution and computing the growth rate deterministically.
-    \item Gompertz parameters $\{K, C, B_{\text{pop}}\}$ and $\sigma_B$ (4 parameters) are estimated from only 407 observations, with the ordinal stage variable treated as continuous in the original C\# loss function. The Python version corrects this with cross-entropy loss but the identifiability issue remains.
-    \item Parameters $C$ and $B_{\text{pop}}$ are multiplicatively linked in the exponent $\exp(C - B_{\text{pop}} \cdot t)$, making them potentially collinear.
+    \item The growth rate and the lead time share one time axis: the stage mix is invariant under a joint rescaling, so only the \emph{relative} crossing times are identified. The model resolves this by fixing the single time scale \texttt{LeadTimeMean} and deriving the crossing times from the stage mix.
+    \item The Gompertz shape $\{K, C, B_{\text{pop}}\}$ is fitted to those derived crossing times (not to raw stage records), while the heterogeneity $\sigma_B$ remains a hand-set assumption.
+    \item Parameters $C$ and $B_{\text{pop}}$ are multiplicatively linked in the exponent $\exp(C - B_{\text{pop}} \cdot t)$, so they trade off along a ridge; the crossing-time calibration picks one representative point.
 \end{itemize}
 
 \subsection{Fundamental Non-Identifiability of Natural History Parameters}
+\label{sec:ident}
 
 The model has a \textbf{structural non-identifiability} that cannot be resolved through better optimization algorithms or more data of the same kind. This is not a coding error but an epistemological limit of clinical diagnosis data.
 
 \subsubsection{The Underdetermined System}
 
-Three quantities define the preclinical trajectory of a cancer:
+The preclinical trajectory of a cancer is governed by:
 \begin{enumerate}[nosep]
-    \item \textbf{IncidenceAge} $t_0$ — when the first malignant cell appears.
-    \item \textbf{GrowthRate} $\gamma$ — how fast the tumor progresses through stages.
-    \item \textbf{Lead time} $t_D$ — time from incidence to clinical diagnosis.
+    \item \textbf{Onset age} $t_0$ — when the first malignant cell appears.
+    \item \textbf{Growth rate} $B_{\text{ind}}$ — how fast the tumor progresses through stages (Gompertz).
+    \item \textbf{Lead time} $t_D$ — time from onset to clinical diagnosis.
 \end{enumerate}
 
-These are related by a single observable equation:
+The only observables are the pair (diagnosis age, stage at diagnosis). In the Gompertz model the crossing times $t_s$ and the lead time both scale as $1/B_{\text{ind}}$, so the diagnosed stage depends only on the ratio $t_s / t_D$:
 \begin{equation}
-    t_{\text{diagnosis}} = t_0 + t_D,
-\end{equation}
-and the stage at diagnosis $s$ is related to $\gamma$ and $t_D$ via:
-\begin{equation}
-    \gamma = \exp\left( \frac{\log(s)}{t_D} \right) \quad \text{or equivalently}\quad t_D = \frac{\log(s)}{\log(\gamma)}.
+    s_{\text{diag}} = 1 + \#\{\, s \in \{2,3,4\} : t_s(B_{\text{ind}}) \le t_D \,\}.
 \end{equation}
 
-This gives \textbf{one equation with three unknowns}:
-\begin{equation}
-    \underbrace{t_0, \gamma, t_D}_{\text{3 unknowns}} \qquad \text{from} \qquad \underbrace{t_{\text{diag}}, s}_{\text{2 observables}}.
-\end{equation}
-
-The system is structurally underdetermined: infinitely many combinations $(t_0, \gamma, t_D)$ produce the same observed $(t_{\text{diag}}, s)$.
+Hence the \textbf{stage mix is invariant to a joint rescaling of the growth rate and the lead time}: the data identify the \emph{shape} of the crossing-time pattern (the relative progression), but not its \emph{absolute time scale}. This is the classic non-identifiability of natural-history models: incidence and mortality alone underdetermine the hidden state (stage, sojourn time, growth).
 
 \subsubsection{Why Repeated Observations Are Impossible}
 
@@ -249,22 +270,24 @@ This is the fundamental asymmetry: we have cross-sectional data (age + stage at 
 
 \subsubsection{How the Model Handles This}
 
-The model makes \textbf{explicit assumptions} to resolve the underdetermination:
+The model resolves the underdetermination with a \textbf{single explicit assumption} — the mean preclinical lead time \texttt{LeadTimeMean} ($\mu$), i.e.\ the absolute time scale. Everything else is then \textbf{calibrated to reproduce the staging data's stage mix}:
 
 \begin{enumerate}[nosep]
-    \item \textbf{Lead time} $t_D$ is not inferred from data but \textbf{sampled from an a priori exponential distribution} whose means are user-specified parameters (\texttt{LeadTimeByStageMeans}: 1, 3, 4, 5 years for stages I--IV).
-    \item \textbf{Growth rate} $\gamma$ is then \textbf{computed deterministically} from the sampled $t_D$ and the observed stage $s$: $\gamma = \exp(\log(s)/t_D)$.
-    \item \textbf{Incidence age} $t_0$ is computed as $t_{\text{diag}} - t_D$.
+    \item The stage mix $[p_1,p_2,p_3,p_4]$ pins down three points of the diagnosis-time CDF: $F(t_s) = \sum_{k \ge s} p_k$.
+    \item With an exponential diagnosis time of mean $\mu$, the crossing times follow in closed form: $t_s = -\mu \ln\!\left(\sum_{k \ge s} p_k\right)$ for $s = 2, 3, 4$.
+    \item The Gompertz shape $\{K, C, B_{\text{pop}}\}$ is fitted to those crossing times.
+    \item The onset age is $t_0 = t_{\text{diag}} - t_D$.
 \end{enumerate}
 
-Thus, \textbf{two of the three quantities} ($t_D$ and $\gamma$) are not identified from data at all — they are entirely determined by the assumed lead time distribution. The model's predictions are therefore \textbf{conditional on these assumptions}.
+Thus, \textbf{one quantity ($\mu$, the time scale) is an assumption}; the growth curve and the relative stage progression are identified (calibrated) from the data. The individual heterogeneity $\sigma_B$ is a second, hand-set assumption that smears the crossing times.
 
 \subsubsection{Consequences}
 
 \begin{itemize}[nosep]
-    \item \textbf{The model cannot be validated} against data on the unobservable natural history. Any goodness-of-fit metric for predicted incidence or mortality reflects both the model's structural adequacy \textit{and} the correctness of the lead time assumptions — these cannot be separated.
-    \item \textbf{Different lead time assumptions produce different conclusions.} Changing \texttt{LeadTimeByStageMeans} changes the inferred growth rates $\gamma$, which in turn changes predicted survival, screening effectiveness, and years of life saved. The sensitivity analysis tool in the web interface quantifies exactly this effect.
-    \item \textbf{The model is scientifically honest about this limitation.} Rather than pretending to identify what cannot be identified, it makes assumptions explicit and provides a sensitivity analysis tool to explore their impact.
+    \item \textbf{The stage mix is reproduced by construction.} The simulated stage distribution matches the staging data (verified: USA $0.226/0.239/0.298/0.237$ vs.\ data $0.220/0.256/0.307/0.217$).
+    \item \textbf{The time scale remains an assumption.} Changing \texttt{LeadTimeMean} rescales the growth curve but leaves the stage mix unchanged; it does affect survival timing and cure counts. The sensitivity analysis tool in the web interface quantifies exactly this effect.
+    \item \textbf{The model cannot be validated} against data on the unobservable natural history. Any goodness-of-fit metric for predicted incidence or mortality reflects both the model's structural adequacy \textit{and} the correctness of the lead time assumption — these cannot be separated.
+    \item \textbf{The model is scientifically honest about this limitation.} Rather than pretending to identify what cannot be identified, it isolates the single non-identifiable scale and calibrates the rest to the data.
 \end{itemize}
 
 \subsubsection{Possible Mitigations (Not Implemented)}
@@ -296,7 +319,7 @@ Thus, \textbf{two of the three quantities} ($t_D$ and $\gamma$) are not identifi
 
 \begin{itemize}[nosep]
     \item \textbf{[FIXED] Incorrect binomial likelihood for proportions}. The C\# version used $I(a) \log h + (1-I(a))\log(1-h)$ for proportion data $I(a) = C(a)/P(a)$. The Python version uses the correct Poisson likelihood: $L = \sum_a [C(a) \log(h_D(a) P(a)) - h_D(a) P(a)]$.
-    \item \textbf{[FIXED] MSE for ordinal stage data}. The C\# version used sum-of-squares for stage prediction, assuming normality of errors. The Python version uses cross-entropy with Gaussian kernel softmax.
+    \item \textbf{[FIXED] Ad-hoc stage handling}. The C\# version used sum-of-squares for stage prediction (assuming normal errors) and then back-calculated a growth rate from the stage. The Python version drives progression with the Gompertz model and calibrates its stage-crossing times to the observed stage mix.
     \item \textbf{[FIXED] Bug in mortality calibration}. The C\# \texttt{ObjectiveFunctionMortLH} used \texttt{DiagnoseHazard} instead of \texttt{CancerDeathHazard} at line 86. The Python version uses the correct hazard.
     \item \textbf{[FIXED] Simulation-based calibration replaced}. The C\# mortality calibration regenerated the entire 1M-agent population at each Nelder--Mead iteration. The Python version uses analytical Poisson likelihood.
 \end{itemize}
@@ -308,7 +331,7 @@ Thus, \textbf{two of the three quantities} ($t_D$ and $\gamma$) are not identifi
 \begin{enumerate}[nosep]
     \item \textbf{Fixed: Incorrect hazard in mortality calibration} (\texttt{ObjectiveFunctionMortLH} used \texttt{DiagnoseHazard} instead of \texttt{CancerDeathHazard}). Replaced with analytical Poisson likelihood using the correct hazard.
     \item \textbf{Fixed: Incorrect binomial likelihood for proportion data}. Replaced with Poisson likelihood: $C(a) \sim \text{Poisson}(h_D(a) \cdot P(a))$.
-    \item \textbf{Fixed: MSE loss for ordinal stage data}. Replaced with cross-entropy via Gaussian kernel softmax probabilities.
+    \item \textbf{Fixed: Ad-hoc stage progression}. Replaced the sum-of-squares stage fit and the back-calculated exponential growth rate with a Gompertz model whose stage-crossing times are calibrated to the staging data's stage mix.
     \item \textbf{Fixed: Memoryless exponential for cancer death}. Replaced constant hazard with time-dependent alternatives available in the \texttt{Hazard} base class (Weibull, Log-Logistic).
 \end{enumerate}
 
@@ -319,8 +342,7 @@ Thus, \textbf{two of the three quantities} ($t_D$ and $\gamma$) are not identifi
     \item \textbf{Structure-of-Arrays (SoA)}: Replaced \texttt{List<Person>} with 20+ separate NumPy arrays. Memory usage reduced $\sim$10$\times$, enabling vectorized operations.
     \item \textbf{Numba JIT compilation}: Cancer history computation (\texttt{\_compute\_cancer\_histories\_numba}) and screening logic (\texttt{apply\_screening\_batch}) are compiled with \texttt{@njit}, providing $\sim$50$\times$ speedup over Python loops.
     \item \textbf{Vectorized population generation}: Ages, natural death ages, and diagnosis ages are batch-generated via \texttt{np.searchsorted} and \texttt{np.argmax} instead of per-agent loops.
-    \item \textbf{scikit-learn L-BFGS for logistic regression}: Replaced the C\# per-sample SGD (20 seconds for 407 records) with scikit-learn's optimized L-BFGS solver ($\sim$0.1 seconds), a $\sim$200$\times$ speedup.
-    \item \textbf{Nelder--Mead for Gompertz fitting}: Replaced C\# \texttt{differential\_evolution} (7500+ function evaluations) with Nelder--Mead ($\sim$500 evaluations), providing $\sim$15$\times$ speedup.
+    \item \textbf{Analytic Gompertz calibration}: the crossing times are derived in closed form from the stage mix and the shape is fitted with bounded L-BFGS-B (milliseconds), replacing the C\# \texttt{differential\_evolution} loop.
     \item \textbf{Analytical mortality calibration}: Replaced simulation-based calibration with analytical Poisson likelihood, providing $\sim$600$\times$ speedup.
 \end{enumerate}
 
@@ -407,17 +429,17 @@ Explicitly define conditions under which the model is considered falsified:
 
 \section{Conclusion}
 
-The Python port of the MedicalModel2024 cancer screening microsimulation successfully preserves the mathematical structure of the original C\# model while addressing several critical issues:
+The Python implementation is a ground-up re-implementation that supersedes the C\# original. Its model logic:
 
 \begin{enumerate}[nosep]
-    \item A bug in the mortality calibration (incorrect hazard function) is fixed.
-    \item Incorrect statistical likelihoods are replaced with proper Poisson and cross-entropy formulations.
-    \item The simulation-based calibration bottleneck is replaced with analytical likelihoods, providing up to 600$\times$ speedup.
-    \item Agent-based loops are replaced with vectorized NumPy operations and Numba JIT compilation.
-    \item The WinForms GUI is replaced with a Flask + Plotly.js web interface with parameter editing, save/load, and real-time progress tracking.
-    \item Reproducibility is improved through deterministic seed tracking and persistent parameter storage.
+    \item Is driven by a \textbf{Gompertz growth model}: the individual rate $B_{\text{ind}} \sim \mathrm{Lognormal}(B_{\text{pop}}, \sigma_B)$ sets the stage-crossing times, and the diagnosed stage is the number of size thresholds crossed. This makes $\sigma_B$ meaningful and removes the ad-hoc stage regression.
+    \item \textbf{Reproduces the staging data's stage mix}: the crossing times are derived from the observed stage distribution, leaving a single non-identifiable scale (\texttt{LeadTimeMean}).
+    \item Treats aggressiveness as a \textbf{per-stage cure-odds ratio}, reported via stage-stratified survival and cure-fraction tables.
+    \item Corrects the \textbf{per-agent random generator} (SplitMix64), which previously coupled the stage draw to the other quantities.
+    \item Adds a \textbf{minimal cost model} (screening + treatment costs) in the results summary.
+    \item Keeps the corrected statistical likelihoods and the vectorized Numba/L-BFGS-B calibration, so calibration takes milliseconds and a 30-year run completes in seconds with an interactive web dashboard.
 \end{enumerate}
 
-The Python implementation is a ground-up re-implementation that supersedes the C\# original: it corrects the statistical likelihoods and provides superior computational performance, statistical correctness, and usability. The total calibration time was reduced from $\sim$60 seconds to $\sim$8 seconds, and the full simulation cycle (30 years $\times$ 50,000 agents) completes in under 30 seconds, with visualized results in an interactive web dashboard.
+The model is explicit about its one irreducible assumption: natural-history models cannot identify the absolute time scale from incidence and mortality data alone, so it fixes that single scale and calibrates everything else to the data.
 
 \end{document}

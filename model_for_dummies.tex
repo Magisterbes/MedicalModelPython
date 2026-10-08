@@ -33,11 +33,11 @@ Each person is represented by a set of numeric attributes stored as columns in a
     \item \textbf{Natural death age} --- sampled from the all-cause mortality distribution.
     \item \textbf{Cancer diagnosis age} --- the age at which cancer would be diagnosed clinically, without screening. Generated from the diagnosis hazard.
     \item \textbf{Has cancer} --- true if the diagnosis age is earlier than the natural death age.
-    \item \textbf{Stage at diagnosis} --- I, II, III, or IV. Sampled from a multinomial model that depends on age.
-    \item \textbf{Aggressiveness} --- whether the tumour is aggressive (fast-growing) or non-aggressive.
-    \item \textbf{Tumour growth rate} \; $\gamma$ --- how fast the tumour progresses through stages.
+    \item \textbf{Stage at diagnosis} --- I, II, III, or IV. The number of stage-size thresholds the tumour has crossed by the diagnosis time (Gompertz).
+    \item \textbf{Aggressiveness} --- whether the tumour is aggressive; a cure-only label drawn per stage.
+    \item \textbf{Tumour growth rate} \; $B$ --- the individual Gompertz rate (how fast the tumour progresses through stages).
     \item \textbf{Incidence age} --- the age when the first malignant cell appears (years before diagnosis).
-    \item \textbf{Stage ages} --- the ages at which the tumour reaches each stage (0 through terminal).
+    \item \textbf{Stage ages} --- the ages at which the tumour reaches each stage (0 through terminal), from the Gompertz crossing times.
     \item \textbf{Cured} --- whether clinical treatment was successful.
     \item \textbf{Screening-detected} --- whether the cancer was found by screening.
     \item \textbf{Screening-cured} --- whether treatment after screening detection was successful.
@@ -59,14 +59,14 @@ The probability of being clinically diagnosed at age~$a$ is given by a piecewise
 If diagnosed before natural death, the model reconstructs the unobserved preclinical trajectory:
 
 \begin{itemize}[nosep]
-    \item \textbf{Stage at diagnosis} is sampled from an age-dependent multinomial distribution, trained on individual patient records.
-    \item \textbf{Aggressiveness} is determined from the observed proportion of aggressive tumours for that stage.
-    \item \textbf{Lead time} (time from first malignant cell to clinical diagnosis) is drawn from an exponential distribution with stage-specific mean $\mu_s$.
-    \item \textbf{Growth rate} is computed as $\gamma = \exp(\log(s) / t_D)$, where $s$ is the stage number and $t_D$ is the sampled lead time.
-    \item \textbf{Stage ages} are computed backwards: $t_s = t_0 + \log(s)/\log(\gamma)$ for $s = 1,2,3,4$, plus a terminal time drawn from the cancer death hazard.
+    \item \textbf{Growth rate} is drawn per person: $B = \exp(\log B_{\text{pop}} + \varepsilon)$ with $\varepsilon \sim N(0, \sigma_B^2)$, so people differ in how fast their tumour grows.
+    \item \textbf{Stage crossing times} follow from the reduced Gompertz curve $V(t) = \exp(K - \exp(C - B t))$: the tumour reaches size $s$ at $t_s = (C - \log(K - \log s))/B$.
+    \item \textbf{Lead time} (time from first malignant cell to clinical diagnosis) is drawn from an exponential distribution with mean \texttt{LeadTimeMean}.
+    \item \textbf{Stage at diagnosis} is the number of size thresholds ($2,3,4$) crossed by the lead time.
+    \item \textbf{Aggressiveness} is drawn from the observed proportion of aggressive tumours for that stage; it affects \emph{only} the cure odds, not the growth.
 \end{itemize}
 
-The growth rate $\gamma$ controls how many years pass between successive stages. For stage~1, a small random perturbation is added to account for uncertainty in very early tumours. The cancer death hazard is a constant exponential rate $\lambda$.
+The per-stage crossing times are \emph{derived from the staging data's stage mix}, so the model reproduces the observed distribution of stages at diagnosis. The only hand-set quantity is the overall time scale (\texttt{LeadTimeMean}); the cancer death hazard is a constant exponential rate $\lambda$.
 
 \subsection{Step 4: Treatment Outcome}
 
@@ -126,7 +126,7 @@ Years to simulate & How many years the simulation runs (e.g.\ 30). \\
 Initial population & How many virtual people are created (e.g.\ 100\,000). \\
 Diagnosis hazard & Age-specific probability of clinical cancer diagnosis. Fitted to real data. \\
 Cancer death hazard & Rate at which diagnosed cancer causes death (constant exponential rate). \\
-Lead time means & Mean preclinical duration for each stage (e.g.\ 1, 3, 4, 5\;years). These are assumptions, not fitted. \\
+Lead time mean & Mean preclinical duration (the single non-identifiable time scale). The stage crossing times are derived from the staging data. \\
 Gompertz parameters & Shape of the tumour growth curve, fitted once on all records (one model for all). \\
 Treatment efficiency & Probability of cure for stages\;I--IV. \\
 Age cure modifiers & How cure probability changes with age (5 age groups). \\
@@ -145,11 +145,11 @@ Calibration adjusts three sets of parameters so that simulated outputs match rea
 
 \begin{enumerate}[nosep]
     \item \textbf{Diagnosis hazard.} The age-specific diagnosis probabilities are fitted via Poisson maximum likelihood: \textit{expected cases} = incidence probability $\times$ population at each age. This maximises the match to observed case counts.
-    \item \textbf{Tumour growth (Gompertz model).} The growth curve parameters are fitted to individual patient records (age, stage, aggressiveness). The loss function is cross-entropy between predicted and observed stage distributions.
+    \item \textbf{Tumour growth (Gompertz model).} The stage-crossing times are derived from the observed stage mix, and the growth-curve parameters are fitted to them so the model reproduces the distribution of stages at diagnosis.
     \item \textbf{Cancer death hazard.} The constant death rate~$\lambda$ is fitted analytically via Poisson likelihood, matching observed mortality counts by age.
 \end{enumerate}
 
-Calibration uses standard numerical optimisers (L-BFGS for smooth problems, Nelder--Mead for the noisier Gompertz objective) and takes about 10--30 seconds for a typical dataset.
+Calibration uses standard numerical optimisers (L-BFGS-B with bounds for the Gompertz fit) and takes about a second for a typical dataset.
 
 \section{Assumptions (What the Model Simplifies)}
 
@@ -162,7 +162,7 @@ Calibration uses standard numerical optimisers (L-BFGS for smooth problems, Neld
 
     \item \textbf{Constant cancer death hazard.} The risk of dying from cancer is assumed memoryless (exponential distribution). A time-dependent hazard (Weibull, log-logistic) would be more biologically realistic and is available in the code but not used by default.
 
-    \item \textbf{Deterministic stage transitions.} The time to progress from stage~$s$ to $s\!+\!1$ is a deterministic function of the growth rate~$\gamma$: $t_{s+1}-t_s = \log(\frac{s+1}{s}) / \log(\gamma)$. Randomness comes only from the lead time and the sampled~$\gamma$.
+    \item \textbf{Deterministic stage transitions (per person).} Given the individual rate $B$, the crossing times are fixed by the Gompertz curve. Randomness in progression comes only from the per-person $B$ (lognormal, spread $\sigma_B$).
 
     \item \textbf{Complete cure.} A cured person lives to their natural death age. Partial remission, treatment side-effects, and late recurrence are not modelled. The recurrence flag exists but does not affect survival.
 

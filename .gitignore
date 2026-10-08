@@ -7,3 +7,12 @@ config/params_fitted*.json
 .vs/
 *.suo
 *.user
+
+# LaTeX build artifacts (keep the .tex and .pdf)
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
