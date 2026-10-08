@@ -455,7 +455,7 @@ def api_sensitivity():
     _sensitivity_result = None
     import threading
     threading.Thread(target=run_sens, daemon=True).start()
-    return jsonify({'status': 'started'})
+    return jsonify({'status': 'started', 'run_id': run_id})
 
 @app.route('/api/sensitivity/result')
 def api_sensitivity_result():
