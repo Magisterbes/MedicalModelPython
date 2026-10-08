@@ -51,6 +51,7 @@
         .dataset-info .files { font-family: Consolas, "Courier New", monospace; color: #444; }
         .param-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
         .param-group { border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; }
+        .param-group.full { grid-column: 1 / -1; }
         .param-group h4 { font-size: 0.9em; color: #1a237e; margin-bottom: 8px;
                           display: flex; align-items: center; justify-content: space-between; gap: 6px; }
         .hint { position: relative; display: inline-flex; align-items: center; justify-content: center;
@@ -316,7 +317,7 @@ function renderCharts(stats){
 // --- Parameters ---
 function loadParamsFromServer(){
     const grid = document.getElementById('params-grid');
-    let html = `<div class="param-group"><h4>Dataset ${hintIcon('Input datasets for initialisation and calibration. Aggregate data provides age-specific population, case and death counts; staging data provides individual patient records used to fit the stage and aggressiveness (Gompertz) models. Picking a named dataset sets BOTH files at once, so a mismatched pair (for example a USA aggregate with German staging) cannot happen by accident. The list and the citations come from data/datasets.json — see the guide for how to add your own.')}</h4>
+    let html = `<div class="param-group full"><h4>Dataset ${hintIcon('Input datasets for initialisation and calibration. Aggregate data provides age-specific population, case and death counts; staging data provides individual patient records used to fit the stage and aggressiveness (Gompertz) models. Picking a named dataset sets BOTH files at once, so a mismatched pair (for example a USA aggregate with German staging) cannot happen by accident. The list and the citations come from data/datasets.json — see the guide for how to add your own.')}</h4>
         <div class="param-row"><label>Default dataset</label><select id="dataset_select" onchange="selectDataset()" style="width:250px"><option value="">loading...</option></select></div>
         <div class="dataset-info" id="dataset-info"></div>
         <details style="margin-top:8px">
