@@ -9,7 +9,7 @@ t0 = time.time()
 params.init_data()
 print(f"init_data: {time.time() - t0:.2f}s")
 
-from optimization import fit_diagnose_hazard, expand_train_data, fit_gompertz, fit_cancer_death_hazard
+from optimization import fit_diagnose_hazard, fit_gompertz, fit_cancer_death_hazard
 
 # Diagnose hazard (L-BFGS-B, 6 params, smooth)
 t0 = time.time()
@@ -21,17 +21,10 @@ r = fit_diagnose_hazard(
 )
 print(f"Diag L-BFGS-B: {time.time() - t0:.2f}s, LL={r['neg_ll']:.4f}")
 
-# Gompertz (Nelder-Mead, 3 params, fast) — one model for all
-lead_time_rates = np.array(params.lead_time_distributions)
-expanded = expand_train_data(params.individual_data, lead_time_rates)
+# Gompertz (Nelder-Mead, 3 params) — fitted to the stage-mix crossing times
 init_p = params.reduced_gompertz
 t0 = time.time()
-r = fit_gompertz(
-    np.array(init_p),
-    expanded['LeadTime'].values,
-    expanded['Stage'].values,
-    method='Nelder-Mead',
-)
+r = fit_gompertz(np.array(init_p), params.stage_crossing_times, method='L-BFGS-B')
 dt = time.time() - t0
 nll = r['neg_ll']
 print(f"Gompertz: {dt:.2f}s, LL={nll:.4f}")

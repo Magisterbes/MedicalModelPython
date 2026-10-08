@@ -24,39 +24,34 @@ logger = logging.getLogger(__name__)
 
 def neg_log_likelihood_gompertz(
     params: np.ndarray,
-    lead_times: np.ndarray,
-    stages: np.ndarray,
+    target_crossing_times: np.ndarray,
     initial_V0: float = 0.5,
 ) -> float:
     """Calibration loss for the reduced Gompertz growth model.
 
     The reduced Gompertz model predicts V(t) = exp(K - exp(C - B_pop * t)),
     interpreted as a continuous proxy for tumour size. The loss fits the Gompertz
-    crossing time of each stage to the mean lead time of the records observed at
-    that stage, with penalties that keep the carrying capacity exp(K) above the
-    terminal stage (4) and the rate B_pop positive.
-    
+    crossing time of sizes 2, 3, 4 to the target crossing times derived from the
+    staging data's stage distribution, with penalties that keep the carrying
+    capacity exp(K) above the terminal stage (4) and the rate B_pop positive.
+
     Parameters
     ----------
     params : np.ndarray
         [K, C, B_pop] — Gompertz model parameters (3 elements).
         B_std is fixed and not optimized here.
-    lead_times : np.ndarray
-        Lead time (time since incidence) for each observation.
-    stages : np.ndarray
-        Integer stages (1, 2, 3, or 4) for each observation.
+    target_crossing_times : np.ndarray
+        Target crossing times for sizes 2, 3, 4 (years since onset).
     initial_V0 : float
-        Penalty target for V(0): should be small (near 0). Default 0.5.
-    
+        Unused; kept for signature compatibility.
+
     Returns
     -------
     float
-        Negative (cross-entropy loss + V0 penalty).
+        Calibration loss (crossing-time squared error + penalties).
     """
     K, C, B_pop = params[0], params[1], params[2]
-    
-    lead_times = np.asarray(lead_times, dtype=np.float64)
-    stages = np.asarray(stages, dtype=np.int64)
+    targets = np.asarray(target_crossing_times, dtype=np.float64)
     
     # Constraint penalties (large and smooth) to keep the curve well-posed:
     # the carrying capacity must exceed the terminal stage, and the rate must
@@ -67,15 +62,11 @@ def neg_log_likelihood_gompertz(
     if B_pop <= 0.0:
         loss += 1e6 * B_pop ** 2
     
-    # Calibration: the Gompertz crossing time for each stage should match the
-    # mean lead time of the records observed at that stage
-    # (i.e. lead_time_by_stage_means).
-    for s in (1, 2, 3, 4):
-        mask = stages == s
-        if not mask.any():
-            continue
-        target = float(np.mean(lead_times[mask]))
-        arg = K - np.log(float(s))
+    # Calibration: the Gompertz crossing time for sizes 2, 3, 4 must match the
+    # target crossing times (which reproduce the staging data's stage mix).
+    for i, target in enumerate(targets):
+        size = 2.0 + float(i)
+        arg = K - np.log(size)
         if arg <= 0.0:
             loss += 1e6
             continue
@@ -84,87 +75,70 @@ def neg_log_likelihood_gompertz(
     
     # Regularise the carrying capacity toward a plausible value (a few times the
     # terminal stage) so the fit does not collapse to a degenerate huge-K / tiny-B
-    # solution that matches the crossing times by near-cancellation.
-    loss += (K - np.log(5.0)) ** 2
+    # solution. Weight is small so it only matters when the crossing times are
+    # already matched.
+    loss += 0.1 * (K - np.log(5.0)) ** 2
     
     return loss
 
 
 def fit_gompertz(
     initial_params: np.ndarray,
-    lead_times: np.ndarray,
-    stages: np.ndarray,
-    method: str = 'Nelder-Mead',
-    bounds: Tuple[float, float] = (-3.0, 3.0),
+    target_crossing_times: np.ndarray,
+    method: str = 'L-BFGS-B',
     verbose: bool = False,
 ) -> Dict[str, Any]:
     """Fit Gompertz model parameters.
-    
+
     Parameters
     ----------
     initial_params : np.ndarray
         Initial [K, C, B_pop, B_std]. Only first 3 are optimized.
-    lead_times : np.ndarray
-        Lead time data for each observation.
-    stages : np.ndarray
-        Integer stage data (1-4).
+    target_crossing_times : np.ndarray
+        Target crossing times for sizes 2, 3, 4 (years).
     method : str
-        'differential_evolution' (recommended), 'Nelder-Mead', 'L-BFGS-B'.
-    bounds : tuple
-        Bounds for K, C, B_pop.
+        'L-BFGS-B' (recommended, uses bounds) or 'Nelder-Mead'.
     verbose : bool
         Print convergence details.
-    
+
     Returns
     -------
     dict with fitted parameters and diagnostics.
     """
     K0, C0, B0 = float(initial_params[0]), float(initial_params[1]), float(initial_params[2])
     x0 = np.array([K0, C0, B0])
-    
-    if method == 'differential_evolution':
-        bnds = [bounds, bounds, bounds]
-        result = differential_evolution(
+    args = (target_crossing_times,)
+    # Per-parameter bounds: K above log(4) (terminal stage reachable), B_pop > 0.
+    bnds = [(np.log(4.0) + 0.01, np.log(20.0)), (-5.0, 5.0), (0.01, 5.0)]
+
+    if method == 'L-BFGS-B':
+        result = minimize(
             neg_log_likelihood_gompertz,
-            args=(lead_times, stages),
+            x0=x0,
+            args=args,
+            method='L-BFGS-B',
             bounds=bnds,
-            maxiter=500,
-            tol=1e-8,
-            disp=verbose,
-            seed=42,
-            polish=True,  # Refine with L-BFGS-B at the end
+            options={'maxiter': 2000, 'ftol': 1e-10, 'disp': verbose},
         )
-        n_iter = result.nfev
+        n_iter = result.nit
         success = result.success
     elif method == 'Nelder-Mead':
         result = minimize(
             neg_log_likelihood_gompertz,
             x0=x0,
-            args=(lead_times, stages),
+            args=args,
             method='Nelder-Mead',
             options={'maxiter': 5000, 'xatol': 1e-6, 'fatol': 1e-6, 'disp': verbose},
         )
         n_iter = result.nfev
         success = result.success
-    elif method == 'L-BFGS-B':
-        bnds = [bounds, bounds, bounds]
-        result = minimize(
-            neg_log_likelihood_gompertz,
-            x0=x0,
-            args=(lead_times, stages),
-            method='L-BFGS-B',
-            bounds=bnds,
-            options={'maxiter': 2000, 'ftol': 1e-8, 'disp': verbose},
-        )
-        n_iter = result.nit
-        success = result.success
     else:
         raise ValueError(f"Unknown method: {method}")
-    
+
     fitted_params = np.array([
         result.x[0], result.x[1], result.x[2], float(initial_params[3])
     ])
-    
+
     return {
         'params': fitted_params,
         'K': float(result.x[0]),
@@ -176,53 +150,3 @@ def fit_gompertz(
         'success': bool(success),
         'method': method,
     }
-
-
-def expand_train_data(
-    train_data: pd.DataFrame,
-    lead_time_rates: np.ndarray,
-    seed: int = 42,
-) -> pd.DataFrame:
-    """Expand training data with sampled lead times.
-    
-    Equivalent to C# AdjustParamsGompertz.ExpandTrain().
-    Each row is repeated 5 times with different sampled lead times
-    to increase effective sample size.
-    
-    Parameters
-    ----------
-    train_data : pd.DataFrame
-        Individual staging data with 'Age', 'Stage', 'Aggressiveness'.
-    lead_time_rates : np.ndarray
-        Exponential rates (1/mean) for each stage.
-    seed : int
-        Random seed.
-    
-    Returns
-    -------
-    pd.DataFrame
-        Expanded training data with 'LeadTime' column added.
-    """
-    rng = np.random.Generator(np.random.PCG64(np.random.SeedSequence(seed)))
-    
-    rows = []
-    for i in range(len(train_data)):
-        row = train_data.iloc[i]
-        stage_idx = int(row['Stage']) - 1
-        rate = lead_time_rates[stage_idx]
-        
-        for _ in range(5):  # 5 repeats per observation (matching C#)
-            lead_time = np.ceil(rng.exponential(1.0 / rate))
-            new_row = row.to_dict()
-            new_row['LeadTime'] = float(lead_time)
-            rows.append(new_row)
-    
-    result = pd.DataFrame(rows)
-    
-    # Compute stage weights (inverse frequency)
-    stage_counts = result['Stage'].value_counts().sort_index()
-    result['stage_weight'] = result['Stage'].map(
-        lambda s: len(result) / (stage_counts.get(s, 1) * 4.0)
-    )
-    
-    return result

@@ -130,7 +130,7 @@ class Simulation:
             init_age_dist_cdf=self.params.init_age_dist.cdf,
             aging_dist_cdf=self.params.aging_dist.cdf,
             diagnose_hazard_values=self.params.diagnose_hazard.value_by_age,
-            lead_time_rate=1.0 / float(np.mean(self.params.lead_time_by_stage_means)),
+            lead_time_rate=1.0 / float(self.params.lead_time_mean),
             proportion_aggressive=self.params.proportion_of_aggressive,
             gompertz_K=gomp.K, gompertz_C=gomp.C,
             gompertz_B_pop=gomp.B_pop, gompertz_B_std=gomp.B_std,

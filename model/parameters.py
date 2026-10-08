@@ -70,10 +70,10 @@ class Parameters:
     cancer_death_hazard_spec: str = "exp, 1"
     
     # ---- Gompertz model initial parameters (before fitting) ----
-    reduced_gompertz: List[float] = field(default_factory=lambda: [0.1, 0.3, 0.1, 0.1])
+    reduced_gompertz: List[float] = field(default_factory=lambda: [1.6, 0.5, 0.5, 0.1])
     
-    # ---- Lead time means by stage (exponential distribution means) ----
-    lead_time_by_stage_means: List[float] = field(default_factory=lambda: [1.0, 3.0, 4.0, 5.0])
+    # ---- Lead time: single non-identifiable scale (mean preclinical duration, years) ----
+    lead_time_mean: float = 3.5
     
     # ---- Natural history ----
     reoccurrence_probability: float = 0.2  # draws the exported flag only; no effect on survival/deaths/costs
@@ -122,8 +122,8 @@ class Parameters:
     # Gompertz model (fitted once on all records)
     gompertz: Optional[GompertzModel] = None
     
-    # Lead time distributions (exponential scales)
-    lead_time_distributions: Optional[List[float]] = None
+    # Gompertz stage-crossing times (derived from the staging data's stage mix)
+    stage_crossing_times: Optional[np.ndarray] = None
     
     # Proportion of aggressive by stage
     proportion_of_aggressive: Optional[np.ndarray] = None
@@ -143,7 +143,6 @@ class Parameters:
     def __post_init__(self):
         """Convert lists to numpy arrays where appropriate."""
         self.reduced_gompertz = list(self.reduced_gompertz)
-        self.lead_time_by_stage_means = list(self.lead_time_by_stage_means)
         self.treatment_efficiency = list(self.treatment_efficiency)
         self.age_cure_constants = list(self.age_cure_constants)
         self.aggressiveness_cure_odds_ratio = list(self.aggressiveness_cure_odds_ratio)
@@ -274,10 +273,7 @@ class Parameters:
         self.diagnose_hazard = parse_hazard(self.diagnose_hazard_spec, self.unreal_life_length)
         self.cancer_death_hazard = parse_hazard(self.cancer_death_hazard_spec, self.unreal_life_length)
         
-        # Step 3: Initialize lead time distributions
-        self._init_lead_time()
-        
-        # Step 4: Load individual staging data and train models
+        # Step 3: Load individual staging data and train models
         self._load_staging_train_data(data_path)
         
         # Step 5: Set screening test parameters
@@ -331,12 +327,27 @@ class Parameters:
         
         logger.info(f"Loaded {len(self.train_data)} age groups from aggregate data.")
     
-    def _init_lead_time(self):
-        """Initialize lead time exponential distributions.
-        
-        Equivalent to C# Parameters.InitLeadTime().
+    def _compute_stage_crossing_times(self, df: pd.DataFrame) -> None:
+        """Derive the Gompertz stage-crossing times from the staging data's stage
+        distribution so the simulation reproduces that mix.
+
+        The stage mix pins down F(t_2), F(t_3), F(t_4) — three points of the
+        diagnosis-time CDF. With an exponential diagnosis time of mean
+        `lead_time_mean` (the single non-identifiable scale), the crossing times
+        are t_s = -mean * ln(P(stage >= s)).
         """
-        self.lead_time_distributions = [1.0 / mean for mean in self.lead_time_by_stage_means]
+        p = np.array([(df['Stage'] == s).mean() for s in (1, 2, 3, 4)],
+                     dtype=np.float64)
+        p1, p2, p3, p4 = p
+        mu = float(self.lead_time_mean)
+        t2 = -mu * np.log(max(1.0 - p1, 1e-9))
+        t3 = -mu * np.log(max(p3 + p4, 1e-9))
+        t4 = -mu * np.log(max(p4, 1e-9))
+        self.stage_crossing_times = np.array([t2, t3, t4], dtype=np.float64)
+        logger.info(
+            f"Stage crossing times from mix {np.round(p, 3).tolist()}: "
+            f"t2={t2:.2f}, t3={t3:.2f}, t4={t4:.2f} years"
+        )
     
     def reinit_with_data_files(self, train_file: str = None, staging_file: str = None):
         """Reinitialize model with alternative data files.
@@ -360,7 +371,6 @@ class Parameters:
         from pathlib import Path
         data_path = Path(self.data_dir)
         self._init_frames(data_path)
-        self._init_lead_time()
         self._load_staging_train_data(data_path)
         
         # Update test params
@@ -387,6 +397,9 @@ class Parameters:
         logger.info("Training Gompertz model...")
         
         self.gompertz = self._get_gompertz_model()
+        
+        # Derive stage crossing times from the staging data's stage mix
+        self._compute_stage_crossing_times(df)
         
         # Aggressiveness distribution by stage
         self.proportion_of_aggressive = self._get_aggressiveness_distribution(df)

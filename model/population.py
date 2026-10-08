@@ -132,8 +132,11 @@ def _compute_cancer_histories_numba(
             b_ind = 1e-6
         cancer_growth_rate[i] = b_ind
         
-        # Lead time: preclinical duration until clinical diagnosis (single rate)
-        ttd = np.ceil(-np.log(max(_uniform(seed + 2), 1e-15)) / lead_time_rate)
+        # Lead time: preclinical duration until clinical diagnosis. Use the
+        # continuous value for the stage determination (the crossing times are
+        # continuous) and an integer value for the age back-calculation.
+        ttd_cont = -np.log(max(_uniform(seed + 2), 1e-15)) / lead_time_rate
+        ttd = int(np.ceil(ttd_cont))
         
         # Gompertz crossing times for stages 2, 3, 4
         t2 = _gompertz_time(gompertz_K, gompertz_C, b_ind, 2.0)
@@ -141,11 +144,11 @@ def _compute_cancer_histories_numba(
         t4 = _gompertz_time(gompertz_K, gompertz_C, b_ind, 4.0)
         
         # Stage at diagnosis = number of thresholds (2, 3, 4) crossed by ttd
-        if t4 <= ttd:
+        if t4 <= ttd_cont:
             stage = 4
-        elif t3 <= ttd:
+        elif t3 <= ttd_cont:
             stage = 3
-        elif t2 <= ttd:
+        elif t2 <= ttd_cont:
             stage = 2
         else:
             stage = 1

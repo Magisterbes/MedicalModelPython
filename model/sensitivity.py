@@ -129,12 +129,20 @@ def _run_sensitivity_job(job):
     and reuses the already-fitted parameters, so a factor's result is a pure
     function of (seed, factor) — identical to the sequential implementation.
     """
-    seed, population, years, factor, base_means, params_blob, export_dir = job
+    seed, population, years, factor, base_mean, base_crossing_times, params_blob, export_dir = job
     params = pickle.loads(params_blob)
     params.init_population = int(population)
     params.years_to_simulate = int(years)
-    params.lead_time_by_stage_means = [m * factor for m in base_means]
-    params._init_lead_time()
+    # Rescale the (non-identifiable) lead-time scale and re-derive the growth
+    # curve so the staging mix is still reproduced at the new scale.
+    params.lead_time_mean = float(base_mean) * factor
+    params.stage_crossing_times = np.array(base_crossing_times, dtype=np.float64) * factor
+    from optimization import fit_gompertz
+    r = fit_gompertz(np.array(params.reduced_gompertz), params.stage_crossing_times, method='L-BFGS-B')
+    params.reduced_gompertz = r['params'].tolist()
+    params.gompertz.K = r['K']
+    params.gompertz.C = r['C']
+    params.gompertz.B_pop = r['B_pop']
     # from_params skips re-reading the parameter file and retraining regressions
     sim = Simulation.from_params(params, seed=seed)
     _simulate(sim, years)
@@ -211,16 +219,17 @@ def run_sensitivity_analysis(
     logger.info("Fitting parameters before sensitivity...")
     _run_fitting(base_sim)
 
-    base_means = list(base_sim.params.lead_time_by_stage_means)
+    base_mean = float(base_sim.params.lead_time_mean)
+    base_crossing_times = np.array(base_sim.params.stage_crossing_times, dtype=np.float64)
     base_sim.params.init_population = int(population)
     base_sim.params.years_to_simulate = int(years)
 
     logger.info(f"Sensitivity analysis: {len(factors)} factors, "
                 f"population={population}, years={years}")
-    logger.info(f"Baseline lead time means: {base_means}")
+    logger.info(f"Baseline lead time mean: {base_mean} years")
 
     params_blob = pickle.dumps(base_sim.params)
-    jobs = [(effective_seed, population, years, f, base_means, params_blob, export_dir)
+    jobs = [(effective_seed, population, years, f, base_mean, base_crossing_times, params_blob, export_dir)
             for f in factors]
 
     in_child = os.environ.get(_CHILD_FLAG) == '1'
@@ -280,7 +289,7 @@ def run_sensitivity_analysis(
     
     out = {
         'factors': factors,
-        'baseline_means': base_means,
+        'baseline_means': [base_mean],
         'metrics': results,
         'agg_stats': {k: [a.tolist() for a in v] for k, v in all_agg_stats.items()},
         'runtime_sec': dt,

@@ -378,7 +378,7 @@ def api_parameters():
         'treatment_efficiency': p.treatment_efficiency,
         'age_cure_constants': p.age_cure_constants,
         'aggressiveness_cure_odds_ratio': p.aggressiveness_cure_odds_ratio,
-        'lead_time_means': p.lead_time_by_stage_means,
+        'lead_time_mean': p.lead_time_mean,
         'test_tp': p.test_tp,
         'test_fp': p.test_fp,
         'selected_test': p.selected_test,
@@ -658,7 +658,7 @@ def api_save_params():
         'treatment_efficiency': p.treatment_efficiency,
         'age_cure_constants': p.age_cure_constants,
         'aggressiveness_cure_odds_ratio': p.aggressiveness_cure_odds_ratio,
-        'lead_time_means': p.lead_time_by_stage_means,
+        'lead_time_mean': p.lead_time_mean,
         'test_tp_selected': p.test_tp_selected,
         'test_fp_selected': p.test_fp_selected,
         'participation_rate': p.participation_rate,
@@ -708,11 +708,11 @@ def _apply_overrides(p, data):
         if not isinstance(v, (list, tuple)):
             v = [v] * 4
         p.aggressiveness_cure_odds_ratio = [float(x) for x in v][:4]
-    if 'lead_time_means' in data:
-        p.lead_time_by_stage_means = list(data['lead_time_means'])
-        # The engine reads the cached lead_time_distributions, not the means, so
-        # re-derive them after the edit (this field used to be inert).
-        p._init_lead_time()
+    if 'lead_time_mean' in data:
+        p.lead_time_mean = float(data['lead_time_mean'])
+        # Re-derive the stage crossing times from the staging mix at the new scale.
+        if p.individual_data is not None:
+            p._compute_stage_crossing_times(p.individual_data)
     if 'test_tp_selected' in data:
         p.test_tp_selected = float(data['test_tp_selected'])
     if 'test_fp_selected' in data:

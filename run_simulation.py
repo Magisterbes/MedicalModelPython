@@ -84,16 +84,12 @@ def _run_fitting(sim: Simulation):
     params.diagnose_hazard.update()
     logger.info(f"  LL={r['neg_ll']:.4f}, iters={r['n_iter']}")
     
-    # 2. Gompertz: Nelder-Mead (3 params, mildly noisy) — ~1s. One model for all.
+    # 2. Gompertz: Nelder-Mead (3 params) — fitted to the stage-mix crossing times.
     logger.info("Fitting Gompertz model (Nelder-Mead)...")
-    from optimization import fit_gompertz, expand_train_data
-    lead_time_rates = np.array(params.lead_time_distributions)
-    
-    expanded = expand_train_data(params.individual_data, lead_time_rates)
+    from optimization import fit_gompertz
     init_p = params.reduced_gompertz
     
-    r = fit_gompertz(np.array(init_p), expanded['LeadTime'].values,
-                     expanded['Stage'].values, method='Nelder-Mead')
+    r = fit_gompertz(np.array(init_p), params.stage_crossing_times, method='L-BFGS-B')
     
     params.reduced_gompertz = r['params'].tolist()
     params.gompertz.K = r['K']

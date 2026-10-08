@@ -7,7 +7,7 @@ Provides:
 """
 
 from .objective_diag import neg_log_likelihood_diag, fit_diagnose_hazard
-from .objective_gompertz import neg_log_likelihood_gompertz, fit_gompertz, expand_train_data
+from .objective_gompertz import neg_log_likelihood_gompertz, fit_gompertz
 from .objective_mort import neg_log_likelihood_mort, fit_cancer_death_hazard
 
 __all__ = [
