@@ -179,6 +179,8 @@ MedicalModelPython/
 │   └── guide.html              # Data-format guide, API examples, dataset appendix
 ├── python_port_analysis.tex    # Scientific analysis with equations and validity critique
 ├── model_for_dummies.tex       # Plain-language guide (no formulas)
+├── model_logic.tex             # Modelling decisions: mechanism, justification, alternatives per element
+├── model_logic_ru.tex          # The same document in Russian
 ├── test_fit_speed.py           # Benchmark for calibration speed
 ├── test_sensitivity_api.py     # Smoke test for the sensitivity API
 └── requirements.txt            # Python dependencies
@@ -216,6 +218,11 @@ MedicalModelPython/
   the dataset appendix and the notes on concurrent use
 - `python_port_analysis.tex` — Full scientific analysis with equations, identifiability critique, and calibration details
 - `model_for_dummies.tex` — Plain-language description for non-specialists
+- `model_logic.tex` (English) and `model_logic_ru.tex` (Russian) — the modelling-decision
+  document: for every element of the model it gives the mechanism, why that design was chosen
+  rather than the alternatives, and what would change if the design were switched. Each element
+  ends with the rejected alternatives. Built PDFs are committed next to the sources
+  (`model_logic.pdf`, `model_logic_ru.pdf`)
 
 ## License
 

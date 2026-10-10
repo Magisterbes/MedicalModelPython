@@ -1,0 +1,1882 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{geometry}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage[hidelinks]{hyperref}
+
+\geometry{margin=2.5cm}
+\setlength{\parskip}{0.6ex}
+\setlength{\parindent}{0pt}
+\emergencystretch=2em
+\widowpenalty=1000
+\clubpenalty=1000
+
+\newcommand{\id}[1]{\texttt{#1}}
+\newcommand{\mech}[1]{\paragraph{Mechanism.} #1}
+\newcommand{\why}[1]{\paragraph{Why this design.} #1}
+\newcommand{\alt}[1]{\paragraph{Alternatives.} #1}
+
+\title{Model Logic: Design Choices, Justifications and Alternatives\\[0.4em]
+\large Cancer Screening Microsimulation Model (MedicalModel2024)}
+\author{Model documentation}
+\date{\today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Purpose, Scope and How to Read This Document}
+
+This document describes \emph{what the model does and why it is built that way}. It is deliberately
+neither a code manual nor a port review. For almost every element of the model there is more than one
+defensible way to do it, so the useful information is not only the choice that was made but the
+alternatives that were rejected and the reason for rejecting them --- because those reasons determine
+where the model is strong, and where a different dataset or a different question would force a
+different design.
+
+Every modelling element is presented with the same three-part template:
+
+\begin{enumerate}[nosep]
+  \item \textbf{Mechanism} --- the rule the model actually applies, stated so that it could be
+        re-implemented from this description alone.
+  \item \textbf{Why this design} --- what the choice buys: identifiability from the available data,
+        epidemiological plausibility, interpretability, or computational cost.
+  \item \textbf{Alternatives} --- other defensible designs, why each was not used here, and what would
+        have to change to use it.
+\end{enumerate}
+
+Two sibling documents cover the other angles and are not repeated here:
+
+\begin{itemize}[nosep]
+  \item \id{model\_for\_dummies.pdf} --- a plain-language walkthrough of the model and the web interface.
+  \item \id{python\_port\_analysis.pdf} --- the technical and statistical review: state variables,
+        statistical corrections, performance, and methodological improvements.
+\end{itemize}
+
+\textbf{Reference configuration.} Every number quoted below as an illustration comes from one
+configuration: the GLOBOCAN colorectal datasets (USA aggregate and staging files), $N = 20\,000$ agents,
+seed 2022, 30 simulated years, screening at ages 50--60 every second year with 50\% participation. That
+run yields 1\,142 cancer cases, 200 patients cured clinically, 5 cured after screen detection, 12\,334
+survivors at the end, and a total cost of 13\,509 units. Numbers from other runs are not comparable
+one-to-one, because the model is stochastic.
+
+\textbf{A note on honesty.} Where an element exists in the code but has no effect on the results, it is
+listed explicitly in Section~\ref{sec:inactive} rather than silently omitted. Where the model
+\emph{cannot} determine a quantity from the available data, that is stated at the point where it
+matters.
+
+\section{Model Class, Time and Population Frame}
+
+\subsection{Why an agent-based microsimulation}
+
+\mech{The model creates $N$ independent agents. Each agent is given one complete cancer history ---
+whether and when a first malignant cell appears, how fast the tumour grows, what stage it has reached by
+the time of clinical diagnosis, whether treatment cures it, and at what age it dies --- and is then
+followed year by year. Nothing is aggregated into fractions; the population statistics are obtained by
+counting agents after the fact.}
+
+\why{Four properties of the question force this design.
+
+\emph{(i) The answer is a difference of tails, not a mean.} Screening is justified by a small number of
+lives shifted out of the cancer-death column, and by the years of life those people gain. Both are
+properties of individual counterfactuals, and they are exactly the quantities a model of averages cannot
+represent: the same individual must be observable with and without the intervention. The model therefore
+stores \emph{both} death ages for every patient (untreated and screening-affected), so the survivors-per-year
+curve is computed from within-individual differences rather than from two independent populations.
+Heterogeneity and the tail go together: the people who benefit are not the average person.
+
+\emph{(ii) Screening is history-dependent.} Who is screened at age 58 depends on participation at 56, on
+whether a cancer was already found, and on the age window. In a state-based model this forces the state
+space to carry the whole screening history. In a microsimulation it is a few boolean flags per agent.
+
+\emph{(iii) The heterogeneity is structural, not decorative.} Individual growth rate
+($B_{\text{ind}}$), per-stage aggressiveness, age-dependent cure efficiency and per-stage treatment
+efficiency all act multiplicatively on the outcome. Representing any of them faithfully in a cohort model
+means multiplying the number of states by the number of levels; combining them is combinatorially
+explosive.
+
+\emph{(iv) The model must reproduce a stage mix, not a mean stage.} The stage at diagnosis is a
+consequence of how long the tumour has been growing and how fast, so it is inherently an individual-level
+crossing event (Section~\ref{sec:stage}).}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Cohort (deterministic) Markov / multi-state life table.} The classical alternative, used
+        for many cancer screening analyses because it is fast, deterministic and easy to communicate.
+        Rejected because it cannot carry the per-individual counterfactual that the ``lives saved''
+        output is defined by, and because the state space grows multiplicatively with heterogeneity.
+  \item \textbf{Age-structured PDE (McKendrick--von Foerster).} Analytically tractable and fast for
+        mean-field questions. Rejected for the same reason, plus a practical one: screening makes the
+        transfer rates time- and history-dependent, which turns the PDE into a large system.
+  \item \textbf{Renewal equation / integral projection model.} Very efficient for incidence and stage
+        shift. Rejected because cause-specific mortality and the within-individual trade of cancer death
+        against other-cause death are awkward to express.
+  \item \textbf{Semi-Markov with sojourn-time distributions.} A good compromise and a genuine option.
+        Rejected here because the stage-crossing mechanism is already a semi-Markov process with an
+        explicit growth model; adding a second latent progression structure would double-count.
+  \item \textbf{Compartmental ODE / system dynamics.} Rejected: no individual variability, no screening
+        history, and ``who benefits'' becomes unanswerable.
+  \item \textbf{Decision tree or Bayesian network.} Appropriate for a single one-off decision, not for a
+        lifetime intervention with competing risks.
+\end{itemize}}
+
+\subsection{Why one-year discrete time steps}
+
+\mech{Time is the integer year counter \id{current\_date}. Ages are integers
+($\text{age} = \id{current\_date} - \id{date\_birth}$). At each step the model (a) removes the agents
+whose death age equals their current age, (b) runs a screening round if the year is on the screening
+grid, and (c) updates the statistics. All events within a year are resolved at year boundaries.}
+
+\why{The time step is chosen to match the granularity of the calibration data and of the intervention
+being modelled, not for convenience. The aggregate data are annual age-banded tables; the programme being
+evaluated is defined on an annual grid (``invite at ages 50--60 every two years''); and the natural-history
+processes involved are slow compared with a year, with one exception noted below. Annual integer ages make
+three internal devices exact rather than approximate: the death comparison is an integer equality, the
+stage at screen detection is a lookup of the stored crossing age against the current age, and the
+exported agent table is directly readable.}
+
+\why{The price is explicit: within a year, events are simultaneous and unordered, no event can occur
+twice in the same year, and a process faster than a year --- the terminal phase after the last stage
+crossing --- is discretised. That last point is not a footnote here: the fitted cancer-death hazard gives
+a mean terminal survival of roughly three years (Section~\ref{sec:calib}), so a one-year grid is adequate
+but not generous.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Continuous time with exponential clocks (Gillespie-style next-event loop).} Exact
+        within-year dynamics and exact screening instants; requires an exponential assumption for every
+        transition and a much larger implementation surface. This is the most defensible upgrade if the
+        timing of the terminal phase ever becomes the object of study.
+  \item \textbf{Monthly or quarterly steps.} Finer, but multiplies cost by 12 or 4 while the calibration
+        data cannot support sub-annual targets, so the extra resolution would not be controlled by data.
+  \item \textbf{Event-driven simulation with a priority queue.} Natural for continuous time; more
+        machinery than the annual grid needs.
+  \item \textbf{Hybrid: annual screening grid with continuous natural history.} A reasonable middle
+        ground, but it complicates reproducibility and the exported agent table for no gain at the
+        current level of data support.
+\end{itemize}}
+
+\subsection{Why a closed cohort and a 30-year horizon}
+
+\mech{There are no births and no migration: the population ages and dies. The initial age structure is
+taken from the observed population, so the cohort already contains all ages at $t=0$. The horizon is
+\id{years\_to\_simulate} (30 by default).}
+
+\why{A closed cohort isolates the effect being estimated. If births and migration were simulated, the
+observed mortality difference between the screening and no-screening scenarios would mix the screening
+effect with demographic drift, and the model would need fertility and migration assumptions it cannot
+validate against anything. Because the initial age distribution is cross-sectional --- people enter at
+their current age --- the cohort is already realistic at $t=0$, so no burn-in is needed and the first
+year of output is usable; this matters for a screening window that opens at age 50. Thirty years covers
+the whole screening window twice over and allows the mortality difference to accumulate, while keeping
+the run interactive: the reference 20\,000-agent, 30-year run completes in a couple of seconds.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Birth cohort followed from age 0.} Cleanest for lifetime outcomes and for interactions
+        with childhood exposures; requires a burn-in of a century and many more agents to reach the same
+        statistical power in the ages 50--80 where the decisions are.
+  \item \textbf{Open population with demographic projection.} More realistic for long-run forecasts;
+        introduces fertility and migration assumptions this model has no data to support, and
+        contaminates the screening contrast.
+  \item \textbf{Steady-state (stationary) population.} Attractive if only long-run rates matter; adds a
+        demographic-equilibrium assumption without helping the screening question.
+  \item \textbf{Hybrid entry at mid-life.} Entering a cohort at age 40--50 would shorten runs further, but
+        discards the interaction between the age at which screening starts and the pre-screening history.
+\end{itemize}}
+
+\section{Demography: Initial Age Structure and Competing Mortality}
+
+\subsection{Initial age structure}
+
+\mech{Every agent is assigned a starting age by sampling from the observed population age structure: the
+aggregate data file's \id{population} column, one value per year of age, is normalised and used as a
+discrete distribution; ages are drawn by the inverse-CDF method (a uniform draw is located in the
+cumulative array). The agent's birth year is then set to minus that age, so absolute age is simply
+``time since birth''.}
+
+\why{The cross-sectional age structure is the correct initial condition for a closed cohort: it fixes both
+the number of people at risk and the age profile of that risk at the moment the simulation starts. Using
+the file as a probability mass rather than as absolute counts means the file's units cancel, so the model
+does not depend on whether the column is in persons, thousands or percentages. Single years of age are
+used because the data are already available at that resolution; the model imposes no binning of its own,
+so any loss of detail is the data's choice rather than the model's.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A uniform or single-peaked age distribution.} Rejected: the age distribution is the
+        dominant driver of both incidence and mortality, so an unrealistic one would corrupt every
+        output.
+  \item \textbf{Age bands with a step function.} Cheaper and closer to how source data are often
+        published; it loses intra-band resolution, which matters near the screening window.
+  \item \textbf{A fitted parametric age profile (Gompertz, Weibull, or a spline).} Smooths sampling noise
+        and extrapolates, but imposes a shape the data do not require, and any misfit propagates into
+        every rate.
+  \item \textbf{Empirical microdata (a census or survey sample of individual ages).} The most faithful
+        option; it needs data the packaged model does not ship with, and the aggregate route already
+        reproduces the marginal distribution.
+  \item \textbf{Starting everyone at the same age (e.g.\ all at 50).} Rejected: it destroys the age
+        composition, removes the youngest and oldest, and makes the screening window a degenerate cohort
+        boundary.
+\end{itemize}}
+
+\subsection{Non-cancer mortality as a competing risk}
+
+\mech{Each agent also receives a \emph{natural death age}, sampled in the same way from a distribution
+built from the observed annual all-cause death counts (\id{deaths all} divided by the total population,
+normalised). Agents whose sampled death age is not greater than their starting age are resampled once; if
+the redraw still fails the death age is set to starting age $+1$, so the agent dies in the first simulated
+year. Thereafter the natural death age is fixed, and everything the model does is compared against it.}
+
+\why{Addressing non-cancer mortality as a single fixed individual ``death age'', drawn once, buys three
+things.
+
+\emph{(i) A competing risk becomes an arithmetic comparison.} With one natural death age and one cancer
+death age per agent, everything that depends on their interaction --- did the cancer or something else kill
+this person first, was this person cured, did screening save them, how many life-years were gained --- is a
+comparison of two numbers. This is what makes the paired screening/no-screening accounting exact rather
+than approximate: there is no control population to re-simulate and no extra sampling noise in the
+contrast.
+
+\emph{(ii) It is distributionally equivalent to a survival model without the bookkeeping.} Drawing the
+death age from the life table is marginally the same as removing an annual fraction of survivors, but it
+replaces a running state variable and an iterative update with one stored integer.
+
+\emph{(iii) The conditional redraw is the right correction.} Because agents enter at their current age,
+their death age must be conditional on already being alive; resampling the minority whose first draw falls
+below the entry age implements exactly that truncation, and the fallback ($\text{age}+1$) guarantees a
+well-defined one-year life instead of a zero or negative lifespan.}
+
+\why{\emph{A consequence that must be stated plainly.} An agent is removed from the population only at its
+natural death age. A recorded cancer death does \emph{not} remove the agent; cancer deaths are counted as
+cause-specific events in the statistics layer. The age structure therefore follows the all-cause life table
+exactly, and the at-risk denominator used for cause-specific rates still contains agents who already have a
+cancer death recorded. This is the standard device of estimating a cause-specific hazard with the
+general-population denominator, and it is correct under the usual assumption that the two causes act
+independently --- that removing one cause does not change the force of the other. It would be the wrong
+device if a cancer death were assumed to change the subsequent risk of dying from other causes, and it is
+one of the assumptions a validation exercise should probe.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{An annual Bernoulli draw with a running survival flag.} Distributionally equivalent for a
+        single cause, but it makes the death age an output rather than an input, which makes the paired
+        counterfactual much harder, and it adds a state variable that must be kept consistent.
+  \item \textbf{A parametric mortality law (Gompertz--Makeham, Heligman--Pollard, Lee--Carter).} Smooth,
+        compact, extrapolable; unnecessary here because the whole age range (0--110) is observed, so a
+        fitted law could only add misfit.
+  \item \textbf{Cause-deleted (other-cause) life tables.} Conceptually the right construction for a cancer
+        model: remove cancer deaths from the background so the two causes are not double-counted. Not used
+        because the packaged aggregate file supplies all-cause deaths only --- the required input is a
+        cause-specific death column by age. The helper that converts annual risks into a death-age
+        distribution (\id{risks\_to\_distribution}, $P(T=a)=q(a)\prod_{j<a}(1-q(j))$) is present in the
+        code but never called: the model uses observed deaths directly.
+  \item \textbf{Frailty models (a Gamma-distributed individual hazard multiplier).} Captures mortality
+        selection --- the frail die first, so survivors are a selected subgroup --- and is a
+        well-established correction. Not used because the frailty distribution is not identifiable from
+        aggregate death counts, and it would quietly change the meaning of every age-specific rate.
+  \item \textbf{Explicit competing-risks hazards with a copula.} The most complete treatment, allowing the
+        two causes of death to be dependent; requires information on the degree of dependence that
+        aggregate cross-sectional data cannot provide.
+\end{itemize}}
+
+\section{Cancer Onset: The Diagnosis Hazard}
+
+\subsection{Functional form of the hazard}
+
+\mech{The annual probability that a cancer is clinically diagnosed at age $a$ (given no earlier
+diagnosis) is a \emph{piecewise-constant hazard on the log scale}:
+\[
+\log h(a) \;=\; \beta_0 + \sum_{k=1}^{K}\beta_k\,\mathbf{1}\{a \ge t_k\},
+\]
+with break-point ages $t_k$ and coefficients $\beta_k$ supplied by the configuration (the packaged
+default is $t = (-1,0,40,50,60,70)$ with $\beta = (-11.9,0.01,0.28,-0.11,-0.1,-0.1)$). The value of
+$h(a)$ is capped at 1. The \emph{diagnosis age} of an agent is then the first age $a$ at which a
+Bernoulli trial with probability $h(a)$ succeeds, scanning ages from 0 upward; if no age succeeds, the
+agent is never diagnosed and receives a sentinel diagnosis age ($110$, the ``unreal life length'') that
+means ``no clinical cancer''. The scan is vectorised: for every agent, a column of uniform draws is
+compared with the hazard curve and the first success is taken.}
+
+\why{The functional form follows directly from what can be calibrated and what the model needs next.
+
+\emph{(i) The calibration target is an age-specific annual incidence rate}, and a piecewise-constant
+discrete hazard is exactly the quantity that corresponds to it: ``the annual probability of a diagnosis
+given no diagnosis yet''. Choosing a hazard (rather than a distribution of diagnosis ages) means the
+fitting step is linear in the coefficients and can be solved in milliseconds, which is what makes an
+interactive web interface possible.
+
+\emph{(ii) The break points are placed where the observed curve changes slope.} Incidence rises steeply
+from mid-life, and the knots at 40, 50, 60 and 70 are the ages where the slope changes in the target
+data, so a handful of parameters captures the shape without imposing a functional family.
+
+\emph{(iii) The log scale does two jobs.} It keeps $h$ strictly positive without constraints, and it lets
+the constant term express a baseline probability over several orders of magnitude --- the fitted
+$\beta_0 \approx -11.9$ corresponds to a hazard of order $10^{-5}$ per year at young ages, which is the
+right order of magnitude for a rare cancer and cannot be represented comfortably on a linear scale.
+
+\emph{(iv) The cap at 1 and the first-success scan make the object a proper probability and a proper
+first-event.} Capping is required because the Bernoulli device needs a probability; taking the first
+success encodes the fact that ``age at diagnosis'' is a first-event time, so no agent can be diagnosed
+twice and no agent can accumulate two independent diagnoses.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A smooth parametric hazard (Gompertz, Weibull, log-logistic, gamma).} One or two
+        parameters, a smooth derivative, easy to communicate; the risk is systematic misfit precisely
+        where it matters, at the turnover and in the late-life plateau of cancer incidence. It is the
+        natural choice if the target is a single narrow age range rather than the whole lifespan.
+  \item \textbf{Splines (natural cubic, B-spline, or a penalised P-spline).} More flexible than step
+        functions and smoother than a piecewise-constant fit; costs extra parameters and a penalty
+        weight to choose. This is the most natural refinement of the present design.
+  \item \textbf{Using the observed age-specific rates directly as the hazard} (no fitting at all).
+        Removes the identifiability question entirely; the cost is sampling noise, no smoothing, no
+        ability to interpolate or extrapolate, and a subtle mismatch between an annual rate and an annual
+        discrete hazard unless the person-years correction is applied.
+  \item \textbf{A mechanistic carcinogenesis model} (two-stage clonal expansion / Moolgavkar--Venzon--Knudson,
+        Armitage--Doll multi-stage, or multistage with genomic instability). Explains \emph{why} incidence
+        rises roughly as a power of age and links initiation and promotion to exposures, which would make
+        risk-factor modelling possible. Not used because such models are not identifiable from
+        age-specific incidence alone --- many parameter combinations reproduce the same incidence curve
+        --- and because the extra structure does not improve the screening question being asked.
+  \item \textbf{Age--period--cohort modelling.} The right tool for incidence \emph{trends}; it needs
+        several periods and cohorts, whereas this model deliberately simulates a single cross-section.
+  \item \textbf{Separate hazards for progressive and non-progressive lesions} --- the adenoma--carcinoma
+        sequence in colorectal cancer, with a pre-clinical detectable phase of its own. This is the
+        correct structural treatment of pre-cancer and is the single largest structural omission in the
+        present model (Section~\ref{sec:assumptions}); it requires lesion-level data.
+\end{itemize}}
+
+\subsection{What counts as ``having cancer'', and the oldest agents}
+
+\mech{An agent is marked \id{has\_cancer} if and only if the sampled diagnosis age is below the sentinel
+($110$) \emph{and} below the agent's natural death age. A person who would die before their clinical
+diagnosis year is therefore never given a tumour history at all. In addition, agents who are already
+older than 98 at $t=0$ are assigned the sentinel directly, so they can never develop cancer during the
+run.}
+
+\why{Both rules follow from the same decision: the model's unit of cancer is \emph{a cancer that would be
+clinically diagnosed in this person's remaining lifetime}. That is exactly the event that produces the
+observed incidence and mortality, and exactly the event that screening could displace. An agent who dies
+before the diagnosis year contributes nothing to any reported quantity, so constructing a tumour history
+for them would add cost and a meaningless trajectory. The age guard has the same motive in a cruder form:
+the diagnosis-age scan is bounded by the maximum representable age, and back-calculating a preclinical
+onset age for an agent already past 98 would place the entire preclinical trajectory outside the
+simulated window, so the agents concerned are simply excluded.}
+
+\why{\emph{What this costs, stated honestly.} The natural history is \emph{diagnosis-driven}: everybody
+who has cancer in the model would also have been diagnosed clinically. The model therefore cannot
+represent a cancer that exists but never becomes clinically apparent --- which is precisely the
+overdiagnosis mechanism. Without screening this is harmless, because such a cancer is invisible in every
+reported outcome anyway. Under a screening scenario it is not harmless: every screen-detected cancer is a
+``true'' cancer that would have been diagnosed and could have killed, so in the presence of a real
+non-progressive fraction the model will overstate the benefit of screening. The age guard is also a blunt
+modelling shortcut with no epidemiological justification --- it is a range guard dressed as a risk rule
+--- and it should be revisited if the horizon, the initial age structure or the sentinel age changes.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Onset-driven natural history.} Give every agent a preclinical onset (from an initiation
+        hazard) and let progression, symptoms and screening determine whether and when it is ever
+        diagnosed. Then a person can die with undiagnosed cancer, and both overdiagnosis and
+        ``screen-detected but would never have surfaced'' become representable. This is the structurally
+        correct design and the direction a serious upgrade should take; it requires a progression model
+        and preclinical-detectability data that the packaged inputs do not contain.
+  \item \textbf{A non-progressive (or slowly progressive) fraction.} Standard in screening models: a
+        fraction $\mathrm{nc}$ of lesions never reach clinical significance. One extra parameter, and it
+        is the accepted way to make overdiagnosis quantifiable --- but it cannot be estimated from
+        incidence and mortality data alone, so it would have to be imposed from the literature and made a
+        target of sensitivity analysis.
+  \item \textbf{No exclusion at all: build a tumour history for every agent regardless of its fate.}
+        Conceptually uniform and it removes the special case, but it multiplies the work for information
+        that no output consumes, and it produces ``cancer in people who are already dead''.
+  \item \textbf{Removing the 98-age guard but widening the sentinel.} A pure implementation fix: the
+        guard should either be dropped (letting the hazard decide) or replaced by an explicit, documented
+        truncation age.
+\end{itemize}}
+
+\section{The Preclinical Phase and the Time-Scale Problem}
+
+\subsection{Exponential lead time}
+
+\mech{For every agent with cancer the model draws a \emph{lead time} (preclinical sojourn time, i.e.\ the
+time from the first malignant cell to clinical diagnosis) from an exponential distribution with mean
+\id{lead\_time\_mean} (3.5 years in the default configuration), so
+$t_{\text{ttd}} \sim \mathrm{Exp}(\lambda)$, $\lambda = 1/\id{lead\_time\_mean}$. The onset age is then
+back-calculated from the \emph{observed} diagnosis age: $\text{onset} = \max(\text{diag} - \lceil t_{\text{ttd}}\rceil, 0)$.
+The continuous value of $t_{\text{ttd}}$ is used for the stage determination (Stage~\ref{sec:stage}) and the
+integer value for the age arithmetic.}
+
+\why{The whole preclinical history is anchored to the diagnosis date rather than simulated forward from an
+onset date, and that choice is the reason the model can be calibrated from aggregate data at all.
+
+\emph{(i) The observable is the diagnosis age.} Anchoring the preclinical trajectory to it means the model
+reproduces the observed incidence exactly by construction and uses the lead time only to decide what the
+tumour looked like \emph{before} a date that is already correct. Nothing has to be right about the absolute
+onset rate, so a whole class of misfit is removed.
+
+\emph{(ii) Exponential is the maximum-entropy choice with a given mean.} Assuming a constant progression
+rate --- no memory of how long the tumour has already been present --- is the least committal assumption
+available for a sojourn time, and it is exactly what the classical Markov screening literature assumes.
+That compatibility is not cosmetic: the relations between lead time, sojourn time and screening benefit
+derived in that literature remain usable to sanity-check the model's behaviour.
+
+\emph{(iii) One parameter, because only one can be afforded.} The absolute scale of the preclinical phase
+is not identifiable (Section~\ref{sec:nonident}), so adding a second sojourn parameter would add a second
+unidentified quantity. The mean is the smallest sufficient summary: it is the scale of everything
+downstream (crossing times, incidence age, stage duration) and it is the single knob the sensitivity
+analysis turns.
+
+\emph{(iv) Memorylessness keeps the staging calibration closed-form.} Under an exponential lead time
+$P(\text{stage} \ge s) = \exp(-t_s/\mu)$, which is what makes it possible to \emph{invert} the observed
+stage mix into crossing times with one logarithm per stage (Section~\ref{sec:stage}) instead of solving a
+numerical calibration problem.
+
+\emph{(v) Continuous for the comparison, integer for the arithmetic.} Rounding the lead time before
+comparing it with the crossing times would bias the stage distribution (a rounding-down would
+systematically over-produce early stages), so the crossing comparison uses the continuous draw while the
+age arithmetic uses its ceiling.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Gamma or Weibull sojourn times.} The standard generalisations, widely used in
+        screen-detection models; exponential is their shape-$1$ special case. They buy a more realistic
+        shape (few very long sojourns), but the shape parameter has to be assumed rather than estimated,
+        so they trade one assumption for two.
+  \item \textbf{A deterministic (fixed) lead time.} The simplest possible assumption, and the stage mix
+        would then be a knife-edge function of a single threshold rather than a smooth probability; it
+        also makes the preclinical duration unrealistically discrete.
+  \item \textbf{Per-stage dwell times} (a sojourn time for each stage). Much closer to tumour biology and
+        it makes stage duration directly interpretable; the available data cannot inform four separate
+        dwell times, and it forces the crossing times onto an integer grid.
+  \item \textbf{Size-driven detectability from the growth curve itself.} If the tumour is ``detectable''
+        once it crosses a size threshold, the sojourn time is whatever the Gompertz model says it is,
+        which is beautifully self-consistent because the model already contains that curve. The missing
+        inputs are a detectable-size threshold and a size-dependent test sensitivity, neither of which is
+        in the packaged data.
+  \item \textbf{Estimating the lead time from screening data} (screen-detected versus interval cancers,
+        or a randomised screening trial). This is the only route to genuine identification, and it is the
+        single highest-value data addition the model could receive.
+  \item \textbf{Anchoring the mean to the literature} instead of leaving 3.5 as a free number, with the
+        published range used as the sensitivity interval. Operationally identical to the present design,
+        but it turns an assumption into a citable assumption --- the cheapest available improvement.
+\end{itemize}}
+
+\subsection{Non-identifiability of the time scale, and what is fixed instead}
+\label{sec:nonident}
+
+\mech{The model does \emph{not} estimate the preclinical time scale. It fixes the lead-time mean
+(\id{lead\_time\_mean}) and calibrates everything else and, separately, derives the stage-crossing times
+from the observed stage mix (Section~\ref{sec:stage}). The fixed scale is then exposed as the single axis
+of the sensitivity analysis (Section~\ref{sec:sens}).}
+
+\why{The reason is a genuine mathematical property of the system, not a shortage of effort. Let
+$c_s = C - \ln(K - \ln s)$ and write the crossing time of stage $s$ as $t_s = c_s / B_{\text{ind}}$
+(Section~\ref{sec:gompertz}). Under the exponential lead time with mean $\mu$,
+\[
+P(\text{diagnosed at stage} \ge s) \;=\; P(t_s \le t_{\text{ttd}}) \;=\; \exp\!\left(-\frac{c_s}{B_{\text{ind}}\,\mu}\right),
+\]
+so the observed stage mix constrains only the \emph{product} $B_{\text{ind}}\mu$. Doubling the growth rate
+and halving the sojourn mean leaves every observable exactly as it was. Formally, the parameter vector
+$(B_{\text{ind}}, \mu)$ is unidentified along the hyperbola $B_{\text{ind}}\mu = \text{const}$ --- a flat
+likelihood ridge, and a likelihood maximiser would happily return an arbitrary point on it.
+
+There is a second, more basic reason. Onset --- the appearance of the first malignant cell --- is not an
+observable event. The lead time is therefore not a quantity that is measured badly; it is a quantity that
+is, in principle, unobservable in a clinical dataset, because diagnosis interrupts the very history one
+would want to observe. ``Estimated lead time'' in the literature always means ``estimated under an
+explicit model''.
+
+What the data \emph{do} identify is: the diagnosis hazard (from age-specific incidence), the product
+$B_{\text{ind}}\mu$ (from the stage mix), and the terminal-phase hazard (from cancer mortality). The design
+choice is therefore to spend the one remaining degree of freedom as an \emph{explicit assumption with an
+interpretable name} rather than as a fitted value that pretends to be an estimate. Fixing $\mu$ rather than
+$B$ is the asymmetric but correct choice: $\mu$ has literature estimates for colorectal cancer and a plain
+clinical meaning (time from onset to diagnosis), whereas $B$ has a scale that nothing outside the model
+can speak to.
+
+Concretely, the consequence is a clean division of labour: $\mu$ is an assumption, the crossing times are
+\emph{derived} from the data, and the growth-rate parameters are \emph{fitted} to those derived times. So
+the model reproduces the observed stage mix by construction, and the single assumption is visible in the
+parameter file, in the document, and in the sensitivity plots.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Report the lead-time range as the headline result, not as a sensitivity appendix.} Nothing
+        about the maths changes; what changes is that the reader sees a family of curves as the answer
+        rather than one curve plus a caveat. For a screening question this is arguably the more honest
+        presentation, and it is a reporting change rather than a modelling change.
+  \item \textbf{Bayesian treatment: a prior on $\mu$, the rest fitted, and a full posterior.} The
+        statistically cleanest way to say ``$\mu$ is a judgement'' --- the judgement enters as a prior,
+        and its consequences arrive as credible intervals on every output rather than as a set of
+        re-runs. Requires MCMC (or ABC) at a cost of hours instead of milliseconds, and it makes the
+        headline numbers depend on a prior that is itself not derived from data.
+  \item \textbf{Profile likelihood over $\mu$.} Compute the fit as a function of $\mu$ and show the
+        surface. Cheap (the model is fast), transparent, and it makes the ridge visible rather than
+        merely described. This is the smallest possible step towards a proper uncertainty treatment.
+  \item \textbf{Fix $B$ instead of $\mu$.} Symmetric and equally arbitrary, and strictly worse: the growth
+        rate has no external anchor at all, so the choice would be uninterpretable and untestable.
+  \item \textbf{Two-parameter sojourn time.} Worse, not better: it replaces one unidentified scale with
+        two unidentified parameters, and no amount of prior opinion can identify them.
+  \item \textbf{External identification from screening data.} A screening trial or a registry of
+        screen-detected and interval cancers identifies the sojourn time directly; that is the only way to
+        turn $\mu$ into an estimate. It requires individual-level screening data this model does not have.
+\end{itemize}}
+
+\section{Tumour Growth: The Reduced Gompertz Model}
+\label{sec:gompertz}
+
+\subsection{The growth curve}
+
+\mech{Tumour growth is described by the \emph{reduced Gompertz} function
+\[
+V(t) = \exp\!\bigl(K - \exp(C - B\,t)\bigr),
+\]
+where $V$ is an abstract proxy for tumour mass (a ``size''), $t$ is years since the first malignant cell,
+$K$ and $C$ are shape parameters and $B$ is the growth rate. The curve starts at
+$V(0) = \exp(K - \exp C)$ (a small tumour), saturates at $V(\infty) = \exp K$ (the carrying capacity), and
+has its inflection point at $t = C/B$, where the growth switches from accelerating to decelerating. Stages
+are the crossing times of the sizes $2$, $3$ and $4$:
+\[
+t_s = \frac{C - \ln(K - \ln s)}{B}, \qquad s \in \{2,3,4\},
+\]
+which is finite exactly when $\exp K > s$, i.e.\ when the carrying capacity is above the stage threshold.
+In the reference fit ($K = 1.451$, $C = 0.198$, $B = 0.550$, so $\exp K = 4.27$) the crossing times are
+$0.87$, $2.26$ and $5.34$ years.}
+
+\why{Gompertz is chosen for four reasons, three substantive and one structural.
+
+\emph{(i) It is the classical tumour growth law and it matches the qualitative shape of the data.} Tumours
+grow roughly exponentially at first and then decelerate as they outstrip their blood supply and available
+space; the Gompertz curve has exactly that feature --- exponential in the early phase, asymptotically flat
+late --- and has been the default descriptive growth model in oncology for half a century.
+
+\emph{(ii) It is parsimonious without being rigid.} Two shape parameters ($K$, $C$) plus one rate ($B$)
+reproduce a wide range of growth curves, and each parameter has a plain meaning: $\exp K$ is a carrying
+capacity in size units, $C$ fixes the initial size through $V(0) = \exp(K - \exp C)$, and $B$ is the
+specific growth rate.
+
+\emph{(iii) Its crossing times have a closed form.} The inverse
+$t_s = (C - \ln(K - \ln s))/B$ is what makes the staging calibration a \emph{linear-in-a-logarithm}
+problem and lets the model store each agent's stage ages at generation time. A growth law whose stage
+times required numerical inversion would be both slower and much harder to reason about --- and the
+closed form is also what makes the non-identifiability statement of Section~\ref{sec:nonident} provable
+rather than empirical.
+
+\emph{(iv) Crossings of absolute sizes $\{2,3,4\}$ are a normalisation, not a restriction.} The model has
+three crossing times as calibration targets and three free parameters ($K$, $C$, $B$), so the fit is
+exactly identified: the threshold convention is absorbed by the fitted shapes. What the threshold spacing
+\emph{does} affect is the individual-level dispersion of stages (through $B_{\text{std}}$,
+Section~\ref{sec:hetero}), because different tumours cross differently spaced thresholds at different
+times. That is a limitation to keep in view, not a hidden distortion of the population means.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Exponential growth.} Simplest possible law; unbounded, so it has no carrying capacity, and
+        it forces the crossing times to be equally spaced in log size --- a strong restriction that the
+        data would contradict.
+  \item \textbf{Logistic growth.} Familiar and symmetric; the deceleration is symmetric about the
+        inflection, which is known to be wrong for tumours (they grow for a long time before slowing),
+        and its crossing times are symmetric for the same reason.
+  \item \textbf{von Bertalanffy / Bertalanffy--Pütter.} Mechanistically motivated (growth as the balance of
+        anabolic and catabolic terms) and in the same family as Gompertz; comparable behaviour, less
+        standard in the screening literature.
+  \item \textbf{Weibull or power-law growth.} Flexible; no carrying capacity, and no established clinical
+        interpretation of the parameters.
+  \item \textbf{A mechanistic, nutrient- or space-limited ODE model with explicit vasculature.} The most
+        biologically grounded option; many parameters, and it needs volumetric growth data that aggregate
+        cancer statistics do not contain.
+  \item \textbf{Stochastic branching-process growth.} Models the clonal dynamics directly and --- uniquely
+        --- can express \emph{extinction} of early tumours, which is a genuine mechanism of
+        non-progression. Computationally far heavier and not identifiable from the available data.
+  \item \textbf{Piecewise-linear progression (no growth model).} A constant progression rate per tumour
+        class, i.e.\ the classic multi-state Markov formulation. Simpler and directly fittable to stage
+        data; it severs the link between growth and stage timing that makes the current model
+        interpretable, and it leaves the notion of a ``size'' with nothing behind it.
+  \item \textbf{Direct ordinal regression of stage on covariates} --- the design this replaced. It
+        reproduces the observed stage mix, but the stage becomes an arbitrary draw decoupled from any
+        growth process, individual heterogeneity loses its physical meaning, and the failure is silent
+        because the outputs still look plausible.
+\end{itemize}}
+
+\subsection{Individual heterogeneity in the growth rate}
+\label{sec:hetero}
+
+\mech{Each agent with cancer receives its own growth rate
+\[
+B_{\text{ind}} = \exp\!\bigl(\ln B_{\text{pop}} + \varepsilon\bigr), \qquad
+\varepsilon \sim \mathcal{N}(0, B_{\text{std}}^2),
+\]
+so $B_{\text{ind}}$ is log-normally distributed with median $B_{\text{pop}}$ and multiplicative spread
+$\exp(B_{\text{std}})$ (a floor of $10^{-6}$ prevents a degenerate zero). The population-mean curve used
+for fitting uses $B_{\text{pop}}$ without the random effect. $B_{\text{std}}$ is \emph{not} fitted: it is a
+hand-set value (0.1 by default, i.e.\ roughly $\pm10\%$ multiplicative spread).}
+
+\why{Two arguments, one about realism and one about a specific screening phenomenon.
+
+\emph{(i) Growth rates really do vary, and the clinical fact is not a nuisance parameter.} Tumour
+doubling times for the same cancer differ between patients by factors, not percentages. Without
+heterogeneity, the stage is a deterministic function of the lead time: every patient with the same
+elapsed preclinical time would sit at the same stage, which imposes a rigid, artificial correlation
+between ``how long the tumour has been growing'' and ``how advanced it is''. Heterogeneity decouples them,
+so two patients with identical lead times can legitimately be diagnosed at different stages.
+
+\emph{(ii) Length bias needs it.} Screening preferentially catches slowly growing tumours, because a
+tumour that spends longer in the detectable preclinical phase has more chances to be caught. This
+\emph{length bias} --- together with the associated lead-time bias --- is one of the classical reasons
+screening trials overstate benefit, and it can only appear in a model in which growth rates differ between
+individuals. With $B_{\text{std}} = 0$ the phenomenon vanishes by construction and the model's stage shift
+becomes too favourable and too clean.
+
+Log-normal rather than normal is the natural parameterisation for a rate: positivity is automatic, the
+distribution is right-skewed (a few fast tumours, a floor of slow ones) as multiplicative quantities tend
+to be, and the two parameters have direct meaning --- $B_{\text{pop}}$ is the median and $B_{\text{std}}$
+the log-scale spread. One subtlety worth remembering: the arithmetic mean is
+$B_{\text{pop}}\exp(B_{\text{std}}^2/2)$, slightly above the median, so a mean-based comparison against a
+single fitted rate carries a small, known offset.}
+
+\why{\emph{An honest weakness.} $B_{\text{std}}$ governs how much individual variation, stage dispersion
+and length bias the model produces --- and it is set by hand, not estimated. Nothing in the current
+calibration constrains it, because the fitting step targets only the population-mean crossing times
+($K$, $C$, $B_{\text{pop}}$). It is therefore a second unverified assumption alongside the lead-time mean,
+but unlike the lead time it is currently \emph{not} varied in the sensitivity analysis. Turning it into a
+sensitivity axis is cheap and would materially strengthen the uncertainty statement.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{No heterogeneity ($B_{\text{std}} = 0$).} The simplest option and the one that makes the
+        stage a deterministic function of the lead time. It removes length bias and stage dispersion
+        entirely and makes the correlation between stage, lead time and survival artificially tight ---
+        so it should only be used as a deliberate sensitivity comparison, never as the baseline.
+  \item \textbf{A Gamma-distributed growth rate.} Also positive, with independent control of shape and
+        scale; less natural for a multiplicative quantity and no better suited to the data.
+  \item \textbf{A discrete number of growth classes} (slow / medium / fast). Very easy to communicate and
+        to vary in a scenario analysis; coarse, introduces artificial discreteness, and the class
+        boundaries are arbitrary.
+  \item \textbf{A normal (untruncated) growth rate.} Rejected: it admits negative rates, which are not
+        merely unlikely but meaningless.
+  \item \textbf{A full random-effects model of $\ln B$ with covariates} (age, sex, stage at onset). The
+        right way to make growth heterogeneity explicit rather than incidental; needs covariate-specific
+        growth information that the staging file does not contain.
+  \item \textbf{Empirical volume-doubling times} from imaging series or from the literature. The only
+        route to a defensible value of $B_{\text{std}}$; it would convert a hand-set number into a cited
+        one.
+\end{itemize}}
+
+\subsection{From growth to stage: staging as a derived quantity}
+\label{sec:stage}
+
+\mech{For each agent with cancer the model computes its own crossing times $t_2, t_3, t_4$ (from
+$B_{\text{ind}}$, Section~\ref{sec:gompertz}) and compares them with the continuous lead time: the stage
+at clinical diagnosis is $4$ if $t_4 \le t_{\text{ttd}}$, else $3$ if $t_3 \le t_{\text{ttd}}$, else $2$
+if $t_2 \le t_{\text{ttd}}$, else $1$. In other words the stage is \emph{the number of size thresholds
+the tumour has crossed by the time it is clinically diagnosed}. The full stage-age array stored per agent
+is $[\text{onset},\ \text{onset}+t_2,\ \text{onset}+t_3,\ \text{onset}+t_4,\ \text{onset}+t_4+\delta]$,
+where $\delta$ is an exponential draw for the terminal phase after the last crossing.
+
+The crossing times used as calibration \emph{targets} are obtained by inverting the observed stage mix.
+Because the lead time is exponential, $P(\text{stage} \ge s) = \exp(-t_s/\mu)$, so
+\[
+t_2 = -\mu \ln(1 - p_1), \qquad t_3 = -\mu \ln(p_3 + p_4), \qquad t_4 = -\mu \ln p_4 ,
+\]
+where $p_s$ is the observed proportion at stage $s$ and $\mu$ is the lead-time mean. For the USA
+colorectal staging file the observed mix is $0.220/0.256/0.308/0.218$, which yields the targets
+$0.87/2.26/5.34$ years; the resulting fit reproduces the mix with $0.225/0.250/0.284/0.241$
+($N = 20\,000$, seed 2022).}
+
+\why{Staging is derived rather than drawn, and the difference matters more than it looks.
+
+\emph{(i) It makes the stage mix a consequence instead of an input.} When the stage is drawn from a
+distribution, reproducing the observed mix is a tautology --- the model was told the answer. Here the mix
+is produced by the interaction of two physical quantities (how long the tumour has been present, how fast
+it grows), so agreement with the observed mix is a genuine, falsifiable calibration check. The residual
+gap ($0.225/0.250/0.284/0.241$ versus $0.220/0.256/0.308/0.218$) is small and attributable to sampling
+noise, to $B_{\text{std}}$, and to the interaction between the stage and the age-dependent diagnosis
+hazard --- not to a systematic misfit.
+
+\emph{(ii) It is what makes the per-agent growth rate meaningful.} If the stage came from a regression,
+$B_{\text{ind}}$ would be a number with no downstream consequence; because the crossing times are computed
+from it, the growth rate controls the stage, the stage ages, and therefore the timing of the terminal
+phase. Growth heterogeneity has observable consequences, which is exactly what a structural parameter
+should have.
+
+\emph{(iii) The inversion is closed-form, so the calibration target is data-derived and auditable.} One
+logarithm per stage turns the staging file into three numbers that can be printed, checked by hand, and
+traced back to the source table. There is no inner optimisation loop to hide a mistake in.
+
+\emph{(iv) It respects the non-identifiability accounting.} The inversion consumes $\mu$ (the assumed
+scale) and returns the crossing times; the Gompertz fit then consumes the crossing times and returns
+$K$, $C$, $B_{\text{pop}}$. Three targets, three parameters --- an exactly identified chain in which the
+single assumption is visible at the front.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Draw the stage directly from the observed distribution.} Reproduces the mix exactly, at the
+        cost of making the stage exogenous: growth heterogeneity, lead time and screening can no longer
+        shift the stage except by an explicit, arbitrary fudge, so the tumour growth model becomes
+        decorative.
+  \item \textbf{Multinomial or ordinal regression of stage on age, sex and other covariates.} The design
+        this replaced. It fits the mix well and is easy to implement, but it decouples the stage from the
+        growth process, leaves the individual growth rate meaningless, and its coefficient interpretation
+        (``the effect of age on the log-odds of being at a later stage'') has no mechanism behind it.
+  \item \textbf{A latent stage-progression process with transition rates} (the standard multi-state
+        formulation). Clean, and it makes dwell times explicit; it needs observed stage-transition data
+        (e.g.\ from serial screening rounds), which the packaged inputs lack.
+  \item \textbf{Clinical TNM staging} (tumour size $T$, nodal involvement $N$, distant metastasis $M$).
+        The clinically correct and far more informative description, and it would allow a genuine
+        screening stage shift to be measured against real thresholds; it requires the size and nodal
+        information that a stage-only staging file does not contain.
+  \item \textbf{Discrete growth classes with fixed dwell times} (slow/intermediate/fast tumours,
+        each with a fixed dwell time per stage). Simple and transparent, and it is how several published
+        screening models are parameterised; it makes the dispersion of stages a discrete choice rather
+        than a continuous one.
+\end{itemize}}
+
+\section{Aggressiveness: A Cure-Modifying Tumour Label}
+\label{sec:agg}
+
+\subsection{What the label is and what it does}
+
+\mech{Every cancer agent is labelled \emph{aggressive} or not by a Bernoulli draw whose probability is
+taken from the staging data: for a tumour diagnosed at stage $s$ the probability is the observed
+proportion of aggressive tumours in that stage, computed from the file's \id{Aggressiveness} column
+(USA colorectal data: $0.096 / 0.198 / 0.437 / 0.639$ for stages I--IV, i.e.\ aggressiveness and stage
+advance together). The label then affects \emph{exactly one thing} --- the probability of cure. The
+baseline cure probability $p$ is converted to odds, multiplied by a per-stage odds ratio
+(\id{aggressiveness\_cure\_odds\_ratio}, default $0.667$ for every stage), and converted back:
+\[
+\text{odds}' = \frac{p}{1-p}\times \mathrm{OR}_s, \qquad
+p' = \frac{\text{odds}'}{1 + \text{odds}'}.
+\]
+A value of $\mathrm{OR}_s = 1$ is a strict no-op (the transform is skipped), so the assumption can be
+switched off without touching any other behaviour.}
+
+\why{Four reasons, and they interlock.
+
+\emph{(i) It is the only phenotype dimension for which the model has data.} The staging file carries an
+aggressiveness flag, so the per-stage prevalence is \emph{measured}, not assumed. Ignoring it would throw
+away real information; inventing a different tumour-phenotype axis would have no data behind it at all.
+
+\emph{(ii) It is deliberately not a growth modifier, to avoid double counting.} Aggressive tumours are, in
+clinical intuition, fast-growing ones --- so the tempting design is to let the label change $B$. That would
+confound it with $B_{\text{std}}$, which already carries growth heterogeneity, and the calibrated stage mix
+would then have to absorb two overlapping sources of variation. Assigning the label to the cure
+probability puts it where it is observable: in survival, not in staging.
+
+\emph{(iii) The odds-ratio form is the right algebra for a cure probability.} Cure is a binary outcome, so
+an odds ratio is the standard effect measure; it composes multiplicatively with the baseline odds, cannot
+leave $[0,1]$, is symmetric in framing ($\mathrm{OR}$ and $1/\mathrm{OR}$ express ``harder'' and
+``easier'' with the same parameter), and reduces to the identity at $\mathrm{OR} = 1$.
+
+\emph{(iv) The direction is a clinical prior, and the form leaves room for stage-specific evidence.} That
+an aggressive tumour is harder to cure is a reasonable prior, and $\mathrm{OR}<1$ encodes it. The parameter
+is a vector over stages even though the default sets all four equal, so a user with stage-specific
+treatment-response evidence can enter it without changing the design.}
+
+\why{\emph{Two limitations to state plainly.}
+First, the odds ratio itself is \emph{not estimated from data} --- it is set by hand. The staging file
+contains no treatment-outcome column, so there is nothing in the packaged inputs that could identify it:
+what is measurable (the prevalence by stage) is measured, and what is not (the effect of the label on
+cure) is an explicit assumption with a clinical prior.
+Second, because aggressiveness is strongly associated with stage ($0.096$ versus $0.639$), a pooled
+comparison of aggressive against non-aggressive survival confounds the odds ratio with the stage mix ---
+the aggregate numbers will show a large survival gap that is mostly a stage effect. This is a
+Simpson's-paradox trap, and the model avoids the trap by reporting survival curves and cure fractions
+\emph{stratified by stage and aggressiveness} rather than only pooled (Section~\ref{sec:survival}).}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Aggressiveness affecting growth ($B$).} Biologically natural, and it would make the label
+        do something visible in the staging data. Rejected because it double-counts against
+        $B_{\text{std}}$ and destroys the exact stage-mix calibration.
+  \item \textbf{A continuous latent aggressiveness score.} More realistic --- aggressiveness is a
+        spectrum, not a flag --- and it would let the cure odds vary smoothly; it cannot be derived from a
+        binary column, and it would add a non-identifiable latent dimension.
+  \item \textbf{A mixture cure model with the label as a covariate.} Statistically the standard
+        formulation, and the present design is effectively its logistic special case; a full mixture model
+        would estimate the uncured fraction directly, at the cost of a likelihood that needs treatment
+        follow-up data.
+  \item \textbf{Subtype-specific (grade, MSI/MMR status, molecular subtype) survival from the literature.}
+        Substantially more informative and clinically meaningful than a binary flag, and it would make the
+        cure effect evidence-based. Requires subtype-level data the aggregate files do not contain.
+  \item \textbf{Making aggressiveness modify the cancer-death hazard instead of the cure probability.}
+        Equivalent in its effect on mortality, different in mechanism (it changes survival given
+        non-cure rather than the chance of cure). Arguably more direct; harder to calibrate and less
+        interpretable as ``treatment success''.
+  \item \textbf{Dropping the label.} Simplest, and it removes a hand-set parameter --- but it discards the
+        only tumour-phenotype information the inputs provide.
+\end{itemize}}
+
+\section{Treatment and Cure}
+
+\subsection{The cure probability}
+
+\mech{At clinical diagnosis the model computes a cure probability
+\[
+p_{\text{cure}} \;=\; \min\!\Bigl(1,\; \alpha(\text{diag})\times \theta_{s}\Bigr),
+\]
+where $\theta_s$ is the stage-specific treatment efficiency and $\alpha(\cdot)$ is an age-dependent
+efficiency factor. $\theta = [0.7,\,0.3,\,0.2,\,0.2]$ for stages I--IV. $\alpha$ is a step function of the
+age at diagnosis with break points $40/50/60/70$ and values $[1.0,\,0.9,\,0.5,\,0.3,\,0.1]$. If the tumour
+is aggressive, the cure \emph{odds} are multiplied by the per-stage odds ratio of
+Section~\ref{sec:agg} before converting back. Cure is then a Bernoulli draw with the resulting
+probability. In the reference configuration $p_{\text{cure}}$ spans $0.70$ (stage I, diagnosed young) down
+to $0.02$ (stage IV, diagnosed after 70).}
+
+\why{The cure probability is factored into stage and age because those are the two axes on which
+curability is actually observed and reported.
+
+\emph{(i) Stage dominates and the data measure it.} Stage at diagnosis is the strongest single predictor of
+cancer survival in every registry, and it is the dimension along which the staging file is organised.
+Making it the primary factor aligns the model with the observable that constrains it.
+
+\emph{(ii) Age enters as a step function deliberately.} The age gradient in cure is real --- older patients
+tolerate treatment worse, are treated less aggressively and carry more competing mortality --- but a smooth
+age effect would need shape parameters that nothing in the inputs can identify. A four-step function is
+the granularity at which cancer statistics are published and at which the outputs are reported, it needs
+no shape assumption, and it is directly legible to a clinician. The step values read as ``relative cure
+efficiency in this age band''.
+
+\emph{(iii) Multiplication is the right composition.} It keeps the result inside $[0,1]$ without clamping
+except at the top, it makes each factor interpretable as a relative multiplier (a patient with the best
+possible age efficiency receives exactly the stage-specific efficiency), and it makes switching an effect
+off a one-line change (all age constants set to $1$).
+
+\emph{(iv) The cap at $1$ is a correctness requirement} --- the Bernoulli device needs a probability --- and
+it is harmless because the reference values never approach it.
+
+\emph{(v) The odds-ratio transform for the aggressive label behaves sensibly.} It is monotone and bounded,
+so the label's effect is largest at intermediate cure probabilities and shrinks towards zero at both
+extremes, where a cure probability is already nearly certain or nearly hopeless.}
+
+\subsection{What ``cured'' means for death}
+
+\mech{A cured patient receives a cured death age, but the decision of \emph{when} the person dies is made
+by the competing-risk rule of Section~\ref{sec:death}: the agent leaves the population at its natural
+death age, and the cause is attributed in the statistics layer. Each year the model therefore compares two
+stored ages and counts a cancer death when the agent has cancer, is not cured (neither clinically nor by
+screening), the untreated cancer-death age equals the current age, and that age does not exceed the
+natural death age. The uncured patient's cancer-death age is the last stage crossing plus an exponential
+draw for the terminal phase, $\delta \sim \mathrm{Exp}(\lambda_{\text{terminal}})$, where
+$\lambda_{\text{terminal}}$ is fitted to the observed cancer mortality ($0.35$ per year in the reference
+fit, i.e.\ a mean terminal survival of about $2.9$ years).}
+
+\why{Defining cure as ``the cancer no longer determines either the date or the cause of death'' is what
+keeps the screening arithmetic exact and honest.
+
+\emph{(i) The paired counterfactual stays within one agent.} Because the untreated cancer-death age is
+stored for every patient, a cure is simply a change of which cause the statistics count. The lives-saved
+and years-saved outputs are then genuinely within-individual differences, not differences between two
+populations with different sampling noise --- which is what makes them meaningful at the sample sizes
+used.
+
+\emph{(ii) No post-cure survival model is needed.} A cured patient's remaining lifetime is the
+population's remaining lifetime, which is precisely the competing-risk assumption already made for
+everyone else. Introducing anything else would require a cure-specific mortality (treatment toxicity,
+late relapse) and therefore data.
+
+\emph{(iii) The terminal phase carries the timing of cancer death, and it is the one treatment-adjacent
+quantity that is actually fitted.} Cancer mortality in the data is dominated by how long uncured patients
+survive after diagnosis, so a single fitted hazard for the terminal phase is the most economical way to
+match that observable.}
+
+\why{\emph{The confound, restated because it matters.} Because the cure probabilities are hand-set and
+only the terminal hazard is fitted, the observed cancer mortality constrains the \emph{product} of the two
+rather than each separately. A scenario with more cures and faster cancer death can reproduce the same
+mortality curve as one with fewer cures and slower death. Consequences: cure fractions reported by the
+model should be read as scenario assumptions, not as estimates; the fitted terminal hazard absorbs
+whatever the assumed cure probabilities get wrong; and only stage-specific relative survival with
+follow-up could separate them. This is the second flat ridge in the model, and it deserves the same
+prominence as the lead-time ridge of Section~\ref{sec:nonident}.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Stage-specific relative-survival tables used directly} (the classical approach in cancer
+        cost-effectiveness models). The observable becomes the input, so no cure mechanism is needed and
+        published survival is reproduced exactly; the mechanism is lost, ``why'' a patient survives longer
+        cannot be asked, and treatment advances can only be represented by swapping the table.
+  \item \textbf{A mixture cure model with the cure fraction estimated from follow-up data.} Statistically
+        the standard formulation, and the current design is essentially its logistic core; it requires
+        individual follow-up and would identify the cure fractions that are currently assumed.
+  \item \textbf{Excess-mortality (relative survival) hazard modelling.} Model the cancer-attributable
+        excess hazard as a function of stage, age and time since diagnosis instead of a probability of
+        cure. More faithful to how registry data behave, and it avoids the binary ``cured / not cured''
+        abstraction; it needs population life tables by age, sex and period, and it makes the cured flag
+        --- and hence the lives-saved accounting --- only approximate.
+  \item \textbf{Treatment-pathway modelling} (surgery, chemotherapy, radiotherapy, each with its own
+        outcome distribution). Clinically the most informative, and the natural home of several currently
+        inactive parameters (complications, treatment mortality); it needs treatment data that the
+        packaged inputs lack.
+  \item \textbf{Post-cure mortality adjustment} (a multiplier on the natural-death hazard for cured
+        patients, representing treatment toxicity or late relapse). A small, honest extension; it needs
+        data to set the multiplier and would break the ``cured patients are ordinary people'' simplicity.
+  \item \textbf{A strict cure that deletes the cancer death hazard entirely} and re-draws other-cause
+        mortality from a cause-deleted life table. Internally the purest formulation; it requires the
+        cause-deleted life table discussed in Section 3.
+\end{itemize}}
+
+\section{Screening: Schedule, Participation, Test Performance}
+
+\subsection{Invitation schedule and participation}
+
+\mech{A screening round takes place in simulated year $y$ if $y \ge \id{screening\_date}$ and
+$(y - \id{screening\_date})$ is a multiple of \id{frequency} (defaults: the programme starts in simulated
+year 10 and runs every 2 years). In a round, an agent is \emph{eligible} if it is alive, its age lies in
+$[\id{start\_age}, \id{finish\_age}]$ (50--60 by default), it has not already been screen-detected, and it
+has not yet been clinically diagnosed (current age below its diagnosis age). Every eligible agent takes the
+test with probability \id{participation\_rate} (0.5), drawn independently in each round.}
+
+\why{The schedule is expressed as an age window plus a period because that is how screening programmes are
+actually specified and evaluated, and it is representable exactly on the annual time grid
+(Section 2.2). Two eligibility rules carry real modelling content. Excluding already-detected agents keeps
+the history of an agent's screening path simple and reflects the clinical reality that a person found to
+have cancer leaves the screening pathway. Excluding agents already past their clinical diagnosis age
+guarantees that a screen-detected cancer really is a cancer caught \emph{earlier} --- which is the only
+mechanism by which screening can help in this model --- and it prevents a person from being counted both as
+screen-detected and as clinically diagnosed.}
+
+\why{Independent per-round participation is the maximum-entropy assumption given a single aggregate
+attendance rate, and it is the only one that an aggregate rate can support. It also reproduces the
+realistic phenomenon of intermittent attendance: a person may attend at 52 and skip 54. What it
+\emph{cannot} represent is the well-documented subgroup of never-attenders (and the correlated
+over-attenders). That is a genuine simplification: real programmes' benefit depends on reaching the
+under-screened, and a model with independent attendance will overstate the population-level effect of a
+given average participation rate.}
+
+\subsection{Test performance}
+
+\mech{The test is described by a true-positive rate and a false-positive rate, chosen as a pair from a
+menu indexed by \id{selected\_test}: $\{50,60,70,80\}$ map to
+$\text{TP} = \{0.6,0.7,0.9,0.95\}$ and $\text{FP} = \{0.05,0.07,0.1,0.15\}$. Only the true-positive rate
+is actually applied: an agent with preclinical cancer tests positive with probability TP, and an agent
+without preclinical cancer tests positive with probability $0.1\times\text{TP}$.}
+
+\why{A menu of (\mbox{TP}, \mbox{FP}) operating points makes the accuracy trade-off explicit and prevents
+the physically impossible combination of a perfect test: the user can only pick from the efficient
+frontier that the menu offers. Expressing the test as TP/FP applied to the two subgroups (with versus
+without preclinical cancer) is the classical 2$\times$2 formulation and needs no distributional assumption
+about test values --- which matters because no test-value data are shipped.}
+
+\why{\emph{Two documented inconsistencies in this area, both of which should be fixed rather than
+explained.} \emph{(i)} The configured false-positive rate is inert: the false-positive probability used in
+the simulation is $0.1\times\text{TP}$, while \id{test\_fp} is read, stored, exposed in the interface and
+never applied. The result is that changing the test in the menu changes the false-positive rate only
+through its correlation with TP, and always at the fixed 10\% ratio --- so the menu's FP column is
+decorative. \emph{(ii)} The aggressiveness cure odds ratio (Section~\ref{sec:agg}) is applied on the
+clinical cure path but \emph{not} on the screening cure path, so an aggressive tumour detected by screening
+is, in that one respect, treated as if it were not aggressive. Both are small in magnitude and neither
+breaks the model, but they mean the model's screening module does not fully honour its own parameter set.}
+
+\subsection{What screen detection does}
+
+\mech{If an eligible, participating agent has preclinical cancer (it has cancer and its onset age has
+passed), a positive test marks it screen-detected, records the screening age, and determines the stage at
+detection by counting how many crossing ages have already passed at that moment (the same derived-stage
+device as at clinical diagnosis, Section~\ref{sec:stage}). A cure is then drawn with the \emph{same} cure
+model as clinical diagnosis --- the age-efficiency factor times the stage-specific treatment efficiency ---
+but with an independent random draw. If the draw cures, the patient is flagged screening-cured and receives
+a screening death age no earlier than five to ten years after detection; if it does not cure, the
+clinical-cure flag is \emph{cleared} and the untreated terminal age stands.}
+
+\why{The single most important design decision here is that screen detection re-uses the clinical cure
+model with a fresh draw, and that the cure probability depends on the stage \emph{at which the cancer was
+found}. That is precisely where screening benefit comes from in this model: earlier detection means an
+earlier stage, and an earlier stage means a higher cure probability ($0.7$ at stage I versus $0.2$ at
+stage IV). No separate ``screening is better'' effect is assumed --- the benefit is entirely a stage-shift
+consequence, which is the honest way to model it and the way that is falsifiable against trial results.}
+
+\why{\emph{The override, and why it must be stated.} Screen detection \emph{replaces} the clinical
+trajectory: a failed screening cure clears the clinical-cure flag, so a patient who would have been cured
+clinically can end up dying of cancer once detected by screening. The paired lives-saved accounting is
+protected against double counting --- an agent is counted as saved only if it is screening-cured \emph{and}
+was not clinically cured --- but the override means the model does not treat ``the screen-detected patient
+who would have done fine anyway'' as a neutral case. The reported screening effect is therefore the net of
+a benefit channel (earlier detection, lower stage, more cures) and a harm channel (overriding a favourable
+clinical outcome). In the reference run only 5 patients are screening-cured against 22 screen-detected,
+which is consistent with the harm channel being real rather than a corner case.}
+
+\subsection{False positives}
+
+\mech{A participating agent without preclinical cancer tests positive with probability $0.1\times\text{TP}$;
+the event is counted per year and contributes to the reported false-positive curve. It has no other
+consequence: no follow-up procedure, no work-up cost, no anxiety, no effect on future participation.}
+
+\why{The model counts what it can count. False positives matter to a screening programme mainly through the
+burden of unnecessary follow-up, its costs, and the possibility of behavioural change --- and the packaged
+inputs contain information about none of these. Counting them keeps the phenomenon visible in the results,
+and makes the rate's inertness (previous subsection) obvious to anyone who varies the test menu, without
+inventing consequences. Deliberately not modelling a known effect is defensible; silently modelling it with
+invented numbers is not.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A continuous-time screening process with exact instants.} Removes the discretisation of
+        screening ages and lets detection happen the moment a tumour becomes detectable; requires an
+        explicit detectability threshold, which the data do not provide, and it gives up the clean annual
+        grid.
+  \item \textbf{Correlated (``sticky'') participation, never-attenders, invitation-response
+        heterogeneity.} A well-supported and important refinement: screening benefit is concentrated in
+        attenders, and a programme with 50\% attendance by a random half behaves differently from one with
+        100\% attendance by half the population. Needs individual attendance data; the current design
+        cannot express it.
+  \item \textbf{Sensitivity and specificity instead of TP/FP.} Mathematically equivalent to what is applied
+        (sensitivity $=$ TP, specificity $=1-$FP); the present framing is chosen because the model applies
+        the test to an agent known to have preclinical cancer, which is the definition of sensitivity.
+  \item \textbf{A size-dependent test sensitivity} (the test improves as the tumour grows). What real tests
+        do, and it strengthens the length bias; it requires a link between the Gompertz ``size'' and
+        detectability, plus detection-probability-by-size data --- a natural companion to the
+        size-threshold alternative of Section~\ref{sec:nonident}.
+  \item \textbf{Modelling the downstream consequences of a false positive} (follow-up procedures, their
+        costs and complications, anxiety, reduced future attendance). The right long-run direction; it
+        needs health-economic and behavioural data that are absent.
+  \item \textbf{Route-specific treatment realism.} The present assumption is that a screen-detected cancer
+        and a clinically detected cancer of the same stage are treated identically. Real screen-detected
+        tumours often have more favourable biology, so this may understate the benefit; the alternatives
+        are a route-specific cure parameter or route-specific survival from a trial.
+  \item \textbf{An explicit interval-cancer channel} (cancers surfacing between rounds). It arises here
+        endogenously, because the diagnosis hazard keeps operating between rounds; making it explicit
+        means measuring it, which trial data would allow.
+  \item \textbf{Programme scale-up over time} rather than switching on in year 10. A scenario and
+        reporting question rather than a structural one.
+\end{itemize}}
+
+\section{Death Attribution and the Paired Comparison}
+\label{sec:death}
+
+\mech{The model never \emph{draws} a cause of death: it \emph{derives} one, each year, from the ages and
+flags it already stores. The categories are: $0$ = no death recorded (alive), $1$ = non-cancer (natural)
+death, including a cancer patient whose natural death age arrives first, $2$ = cancer death on the untreated
+natural-history path, $3$ = death averted by screening (the patient would have died of cancer but was cured
+by the screen), $4$ = death from other causes after a clinical cure.
+
+Two mortality series are produced by the \emph{same} agents in a \emph{single} run: the untreated series,
+using each patient's natural-history cancer-death age, and the screening-adjusted series, using the
+effective death age (the screening death age for screen-detected, screen-cured patients, and the untreated
+age otherwise). Screening benefit is reported as \emph{lives saved} --- patients who are screening-cured,
+were not clinically cured, and whose untreated cancer death would have fallen inside the simulated window
+(3 people in the reference run) --- and \emph{years of life saved}, the accumulated difference between the
+two death ages (14.4 years in the reference run, about 4.8 years per person saved).}
+
+\why{\emph{(i) Deriving the cause makes the categories mutually exclusive and exhaustive by construction.}
+Every agent falls into exactly one category in every year, so the counts add up and no separate bookkeeping
+can drift out of step.
+
+\emph{(ii) Both arms come from the same agents, so the comparison is paired.} This is the single largest
+statistical-efficiency decision in the model. Because the untreated trajectory is already stored for every
+patient, the screening effect is a within-individual difference, and the variance of that difference is
+orders of magnitude smaller than the variance of a difference between two independently simulated
+populations. A screening benefit of a few lives per 20\,000 agents is measurable at all precisely because
+of this design; with two independent arms it would be buried in sampling noise.
+
+\emph{(iii) No re-simulation means no seed artefacts in the contrast.} The counterfactual is read from a
+stored number rather than obtained by running a control scenario, so the contrast does not inherit the
+control run's randomness and cannot be tuned by choosing a seed.
+
+\emph{(iv) The ``not clinically cured'' clause is the correct counterfactual.} An agent counts as saved only
+if screening cured it \emph{and} it was not going to be cured anyway. Without that clause, every early
+detection would count as a success, including the patients who would have been cured regardless --- which
+is exactly the error that makes naive screening evaluations overstate benefit.}
+
+\why{\emph{Three honest qualifications.}
+\emph{(a)} Agents leave the population only at their natural death age, so a recorded cancer death does not
+remove the agent (\S3.2): the age structure follows the all-cause life table and cause-specific rates use
+the general-population denominator. This is the standard cause-specific device under an independence
+assumption, and it is a natural target for validation.
+\emph{(b)} One branch of the saved accounting tests whether the natural death precedes the untreated
+cancer death, i.e.\ whether the person would \emph{not} have died of cancer. It is empty in the reference
+run, and it is structurally unable to contribute years (because the screening death age is never earlier
+than the untreated one), so it can only inflate the people counter. It is a latent inconsistency rather
+than a present error, and it should be tightened.
+\emph{(c)} Restricting lives saved to deaths that would have occurred inside the simulated window makes the
+reported figure a \emph{within-horizon} number, not a lifetime number: a person saved whose untreated death
+would have fallen in year 45 of a 30-year run is not counted. That understates lifetime benefit and makes
+the headline figure depend on the horizon --- worth stating explicitly wherever it is quoted.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Two independent populations (a screened and an unscreened cohort).} Simpler to implement and
+        easier to explain; the contrast then carries the full Monte Carlo variance, so the same precision
+        needs far more agents, and the answer becomes sensitive to the pair of seeds chosen. It also cannot
+        express ``this same person's two possible lives''.
+  \item \textbf{A same-seed twin run with screening disabled.} Recovers a paired contrast without storing
+        the untreated ages, at the cost of doubling the runtime and of relying on the seeds aligning
+        exactly. The current design obtains the same information for free.
+  \item \textbf{Excess-mortality / relative-survival attribution} (cancer deaths as the excess over a
+        background life table, with attributable fractions). Standard in registry analysis and it does not
+        need a modelled cure mechanism; it abandons the exact paired accounting, needs cause-deleted
+        background mortality, and makes ``saved'' a probability rather than a count.
+  \item \textbf{Probability-of-causation attribution} (a death is partly attributable to each cause).
+        More faithful to how deaths are actually certified; it destroys the clean integer counts that the
+        cost and benefit outputs are built on.
+  \item \textbf{Lifetime accounting with survival extrapolation} beyond the horizon. Gives the genuinely
+        comparable ``lives saved'' figure used in trial reporting; needs extrapolation beyond the data and
+        a discount rate for the years.
+  \item \textbf{QALY- or DALY-weighted outcomes} instead of raw lives and life-years. The right currency for
+        policy comparison; needs utility weights, a discount rate and a perspective (health system versus
+        societal) --- none of which the packaged inputs contain.
+\end{itemize}}
+
+\section{Reported Outcomes}
+
+\subsection{Counting, rates and their denominators}
+
+\mech{All outputs are accumulated as counts indexed by \emph{year} and \emph{age}: the age distribution, the
+number at risk, incident cases (agents reaching their onset age), diagnoses (agents reaching their diagnosis
+age), and cancer deaths in both the untreated and the screening-adjusted series. A rate at age $a$ is then
+the total number of events at that age divided by the total person-years at risk at that age, i.e.\ an
+average annual rate over the horizon. Two deliberately different incidence-type curves are produced:
+\emph{incidence} counts the (unobservable) preclinical onset, and \emph{diagnosis} counts the (observable)
+clinical detection.}
+
+\why{Counting on the same grid as the data means the model's output can be compared with the published tables
+used to calibrate it without any re-binning, which is what makes calibration and validation audits possible
+at all. Splitting the two incidence-type curves is a small design decision with a large diagnostic payoff:
+because the onset curve is a modelled quantity and the diagnosis curve is a calibrated one, their divergence
+is exactly the assumed lead time made visible. Anyone can therefore see how much of the model's output
+depends on the unobservable quantity --- which is the whole point of the lead-time sensitivity analysis.}
+
+\why{\emph{The denominator is the general population, not the cancer-free population.} Because agents are
+removed only by natural death (\S3.2), the at-risk denominator for cause-specific rates includes people with
+a recorded cancer death. This is the standard cause-specific construction under the independence assumption;
+it is also why the reported rates should not be interpreted as ``probability of cancer death among cancer
+patients''. Crude rates by age are reported as well, so a user comparing two populations must age-standardise
+before drawing conclusions.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Age-standardised rates} (direct standardisation to a reference population) instead of crude
+        rates. Necessary whenever two datasets with different age structures are compared --- which is the
+        normal case here, since the packaged datasets differ by country. Computing the standardisation in
+        the model rather than leaving it to the reader is a small, high-value improvement.
+  \item \textbf{Cumulative risk / lifetime risk} (``the probability of a diagnosis before age 75''). The
+        headline metric in most cancer statistics, and more interpretable to a non-specialist than an
+        annual rate; it is a re-expression of what the model already computes.
+  \item \textbf{Incidence-based versus mortality-based outcome framing.} The epidemiological convention is
+        to frame results either in terms of cases avoided or deaths averted; the model reports both, which
+        is the superset, but the choice matters when a downstream decision model expects one specific
+        currency.
+  \item \textbf{Interval-based rather than single-year counts} (five-year age bands, calendar periods).
+        Aligns with how statistics are published and reduces the sparsity of small counts; loses resolution
+        exactly where the model is most informative (the screening window).
+  \item \textbf{Rate smoothing} (as is applied to the sensitivity curves). Makes charts readable but changes
+        the numbers; it should stay a presentation-layer choice, as it is at present.
+\end{itemize}}
+
+\subsection{Survival, stratified by stage and aggressiveness}
+\label{sec:survival}
+
+\mech{Two overall cause-specific survival curves are produced --- one on the untreated series and one on the
+screening-adjusted series --- both measured from diagnosis. In addition, and more recently, the model
+reports cause-specific survival from diagnosis \emph{stratified by stage and by aggressiveness} (each of
+stages I--IV plus the pooled curve, in both the aggressive and the non-aggressive subgroup), together with
+the \emph{cure fraction} of every one of those strata. The event is defined precisely: a patient dies of
+cancer if it is not cured (clinically or by screening) and its untreated cancer-death age is reached before
+its natural death age. Cured patients, and uncured patients who die of something else first, are censored.
+The curve is accumulated as a discrete hazard, $H_t = H_{t-1} + d_t/n_t$ for event counts $d_t$ and numbers
+at risk $n_t$, with $S_t = \exp(-H_t)$ over a 30-year horizon. In the reference run the pooled cure fraction
+is $13.1\%$ for aggressive and $27.2\%$ for non-aggressive patients.}
+
+\why{\emph{(i) Cause-specific rather than all-cause} because the quantity of interest is the cancer's effect,
+and because all-cause survival mixes in the larger non-cancer mortality --- which differs between the
+packaged datasets, so an all-cause curve would make cross-dataset comparison meaningless.
+
+\emph{(ii) Measured from diagnosis} because that is the clinically meaningful time origin and the one used
+in registry survival reporting, so the output is directly comparable with published figures.
+
+\emph{(iii) The ``cured $\Rightarrow$ censored'' convention is the correct cause-specific device.} Once a
+patient is cured the cancer can no longer kill, so for a cancer-specific curve that patient is no longer at
+risk of the event. Counting a cured patient as an event would be plainly wrong; treating it as censored is
+the standard construction, and it is the same rule that the death-attribution layer uses (\S10), so the two
+cannot disagree.
+
+\emph{(iv) Stratification is the Simpson's-paradox guard.} Because aggressiveness rises steeply with stage
+($0.096$ at stage I to $0.639$ at stage IV, \S7), the pooled aggressive-versus-non-aggressive curves are
+mostly measuring stage composition. The per-stage comparison is the only one that isolates the odds-ratio
+assumption, so reporting pooled curves alone would invite exactly the wrong conclusion.
+
+\emph{(v) Reporting cure fractions alongside the curves makes the central mechanism auditable.} The model's
+benefit channel is ``earlier stage $\rightarrow$ higher cure probability'', so the reader should be able to
+see how many patients the cure abstraction actually rescues, by stage and by aggressiveness --- and to check
+that the reported fractions move in the direction the parameter implies.}
+
+\why{\emph{The caveat that follows from \S8.} These curves are conditional on the assumed cure
+probabilities, which are hand-set and confounded with the fitted terminal hazard. A survival curve can
+therefore be ``right'' for partly compensating reasons. The honest reading is: the curves are a diagnostic
+of the model's internal mechanism and a tool for scenario comparison, not an independent estimate of cancer
+survival. Comparing them against externally published stage-specific survival is the test that would settle
+it.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{All-cause survival.} Unambiguous --- it needs no judgement about the cause of death --- but
+        confounded by background mortality, so it cannot be compared across populations with different life
+        tables.
+  \item \textbf{Relative / net survival} (observed survival divided by expected survival from a background
+        life table). The registry standard and the only construction that makes the model's survival
+        comparable with published figures; it needs background mortality by age, sex and period.
+  \item \textbf{Excess-hazard modelling of survival} (the cancer-attributable hazard as a function of stage,
+        age and time since diagnosis). Closer to how the data behave and it removes the need for a binary
+        cure; it requires individual follow-up to estimate.
+  \item \textbf{A fitted parametric survival model} (Weibull, Gompertz, log-normal) instead of a
+        non-parametric curve. Compact summary statistics, extrapolation, and easy comparison of models; it
+        adds a shape assumption that the data cannot always support.
+  \item \textbf{Conditional survival} (survival given that five years have already been survived). Clinically
+        the most interpretable framing of the ``cure plateau'', and it makes the cure abstraction visible
+        without adding a parameter.
+  \item \textbf{Hazard ratios between the arms} instead of full curves. A compact effect measure that is easy
+        to tabulate; it discards the time pattern, which is the aspect screening most affects.
+  \item \textbf{Stratification by additional axes} (age band, route of detection, dataset). Cheap to
+        compute, and it would expose interactions the pooled reporting hides; the risk is small strata and
+        noisy curves, which is why the horizontal resolution should stay at stage and aggressiveness.
+\end{itemize}}
+
+\subsection{Stage shift: why the two stage distributions are not comparable}
+\label{sec:stageshift}
+
+\mech{The model reports the stage distribution of clinically diagnosed cancers and, separately, of
+screen-detected cancers. In the reference run the clinical mix is $0.225/0.250/0.284/0.241$ (mean stage
+$2.55$), while the screen-detected mix ($n = 22$) is $0.000/0.318/0.500/0.182$ (mean stage $2.86$). For
+those same 22 agents, however, the screening stage \emph{minus} the clinical stage averages $-0.68$: 13 of
+22 were detected at an earlier stage (three by two stages, ten by one), eight at the same stage and one
+later, with a mean of $4.8$ years between detection and the clinical diagnosis that would otherwise have
+occurred.}
+
+\why{These numbers must be read together, because the two stage distributions are \emph{not like-for-like}
+and reporting only the marginals would invite the wrong conclusion in either direction. Screening can only
+catch a person who happens to be in the preclinical phase at a round, and a tumour with a long sojourn has
+more opportunities to be caught. That is length bias: the screen-detected group is enriched with
+slowly growing tumours, which have had \emph{more} time to progress. It is therefore entirely possible ---
+and it happens in the reference run --- for the screen-detected mix to look worse than the clinical mix in
+cross-section, while every within-person comparison shows that the screened tumour was found earlier than
+it otherwise would have been.
+
+The model's benefit mechanism is precisely the within-person shift: a lower stage at detection implies a
+higher cure probability (Section~\ref{sec:agg}, stage I $0.7$ versus stage IV $0.2$). Measuring the
+mechanism therefore requires comparing each detected agent with its own counterfactual, which the model can
+do because it stores the clinical stage for every agent. The mean detection-to-clinical-diagnosis interval
+--- about $4.8$ years here --- is the quantity that caps the achievable benefit: it is how much earlier the
+screening route acts.}
+
+\why{\emph{Sample-size warning.} Twenty-two screen-detected cancers in 20\,000 agents is a small count, so
+the screen-detected stage mix carries wide uncertainty and should not be quoted as a point estimate without
+an interval or an ensemble over seeds. The within-person mean shift is more stable because it is a paired
+quantity, which is the same reason the paired design was chosen for the benefit accounting (\S10). This is
+also a practical argument for the standardised, automated sensitivity sweep described in
+Section~\ref{sec:sens}: single-run screening statistics are too noisy to inspect one at a time.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Aggregate stage shift over all cancers} (screened and unscreened pooled). Simplest to
+        present and the least informative, because it is exactly the comparison that length bias distorts.
+  \item \textbf{The paired within-person stage shift as a first-class output} (its mean, median and full
+        distribution, plus the detection-to-diagnosis interval). This is the recommendation: it is the
+        quantity that actually drives the benefit, it is stable because it is paired, and it cannot be
+        misread as a population-level shift.
+  \item \textbf{The distribution of the screen lead time} rather than its mean. Shows the tail of very long
+        sojourns that dominates the aggregate stage mix.
+  \item \textbf{TNM-based shift} (tumour size, nodal involvement, distant metastasis) rather than the
+        four-stage summary. The clinically meaningful description, and it would let the model's stage shift
+        be compared with trial results; it needs size and nodal data.
+  \item \textbf{Age- and stage-standardised incidence and mortality by detection route} (the classical
+        stage-shift analysis used in the screening literature). The standard that would make the model's
+        output comparable with published screening evaluations; it requires standardisation and a
+        like-for-like denominator, both of which are straightforward additions.
+  \item \textbf{``Proportion detected at stage I--II'' as the headline screening metric.} Intuitive, easy to
+        communicate, and it exposes the length-bias caveat immediately --- which is either a feature or a
+        trap depending on how it is worded.
+\end{itemize}}
+
+\section{Costs}
+
+\mech{The cost model is three lines of arithmetic. The screening cost is the number of tests performed
+times a unit test price. The treatment cost is the number of \emph{cured} patients at each stage times that
+stage's unit treatment price, summed over stages ($1,2,3,4$ by stage in the packaged configuration). The
+total is their sum. In the reference run: $13\,111$ tests, screening cost $13\,111$, treatment cost $398$,
+total $13\,509$.}
+
+\why{The prices are dimensionless because no trustworthy cost data are shipped, and a screening model whose
+headline message is a strategy \emph{ranking} needs the relative prices to be defensible rather than the
+absolute ones. Encoding ``a test costs one unit, treatment costs one to four units depending on stage''
+captures only the ordinal, uncontroversial clinical fact --- later-stage treatment is more expensive --- and
+leaves the user free to substitute real tariffs. For the same reason nothing in the calibration touches
+costs: they cannot silently absorb a misfit elsewhere.
+
+Keeping the module to three lines is itself a design decision. A richer cost model would have to make
+assumptions (discount rate, perspective, follow-up protocols, complications) that the packaged data cannot
+support, and those assumptions would then drive the cost comparison --- whereas here the arithmetic can be
+checked by hand and the sensitivity of the ranking to the prices is transparent.}
+
+\why{\emph{Three limitations that should be read as caveats on any cost figure.}
+\emph{(a)} Treatment is charged only for cured patients, so under a payer's perspective the true cost of a
+screening programme is understated (patients who are treated and die are not charged) and the
+cost-per-life-saved arithmetic is not a cost-effectiveness ratio in the usual sense.
+\emph{(b)} Three of the four price parameters are inert: \id{screening\_price} (a per-person programme
+cost), \id{complications\_price} and \id{reoccurrence\_cost} are declared, stored, exposed in the interface
+and never used by the simulation. Treating a parameter set as configuration while some of it is decorative
+is a trap for a user who changes a price and sees nothing happen.
+\emph{(c)} There is no discounting, no time preference, no perspective statement and no cost for a false
+positive, even though a false positive is the single most common costly event in a real programme.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A full cost-effectiveness analysis} (cost per life-year or per QALY gained, discounting,
+        incremental ratios against a comparator, willingness-to-pay thresholds, and probabilistic
+        sensitivity analysis over the prices). This is what a health-economic consumer expects, and the
+        model already computes the two ingredients (costs and years of life saved). It requires a
+        perspective, a discount rate, utility weights and a comparator strategy --- all of which are
+        external decisions rather than data.
+  \item \textbf{Treatment-pathway costing} (diagnosis work-up, surgery, chemotherapy, radiotherapy,
+        palliative and terminal care, each with a state-specific cost). The standard in decision-analytic
+        models, and it makes treatment costs respond to the stage at diagnosis in a clinically meaningful
+        way; it needs pathway and tariff data.
+  \item \textbf{A health-system perspective with real tariffs,} versus \textbf{a societal perspective}
+        adding productivity losses, informal care and travel time. The two can differ by a factor, and the
+        choice belongs to the user; the model should simply state which one it assumes (at present,
+        neither).
+  \item \textbf{Micro-costing of the screening episode} (invitation, kit, laboratory handling, and the
+        follow-up procedure for a positive test). The dominant real-world cost driver at the margin, and the
+        natural place for the currently inert \id{screening\_price} and for the unmodelled false-positive
+        consequences.
+  \item \textbf{Charging for everyone treated, not only for those cured.} A one-line change that would make
+        the cost figure behave as a payer expects, and would make the screening programme look
+        correspondingly less attractive.
+  \item \textbf{Cost by year since diagnosis} (the first year of treatment costs far more than subsequent
+        years). A well-established pattern in the literature, and it would matter for any comparison that
+        shifts diagnoses earlier in time.
+\end{itemize}}
+
+\section{Elements That Exist But Do Nothing}
+\label{sec:inactive}
+
+\mech{The configuration surface and the interfaces expose a number of elements that have no effect on any
+result. They are listed here rather than quietly omitted, because a user who changes a parameter and sees
+nothing happen has been misled by the model, not by their own mistake. Every entry below was verified by
+searching for actual reads in the simulation path.
+
+\begin{center}
+\footnotesize\setlength{\tabcolsep}{3pt}
+\begin{tabular}{@{}p{4.3cm}p{3.8cm}p{7.2cm}@{}}
+\toprule
+\textbf{Element} & \textbf{What it was for} & \textbf{Actual status} \\
+\midrule
+Recurrence probability & recurrence after cure & Draws an exported flag only
+(\id{reoccurrence\_probability} $=0.2$); no effect on survival, death timing or cost. \\
+Post-treatment mortality & extra mortality after treatment & Declared and never read
+(\id{treatment\_mortality\_adjustment} $=1.0$). \\
+Treatment complications & complication rate & Declared and never read
+(\id{complications} $=[0.1]$). \\
+Complication cost & cost per complication & Declared and never read
+(\id{complications\_price} $=1.0$). \\
+Recurrence cost & cost per recurrence & Declared and never read (\id{reoccurrence\_cost} $=1.0$). \\
+Programme cost per person & per-person screening cost & Declared and never read
+(\id{screening\_price} $=1.0$); only the test price is charged. \\
+False-positive rate & the test's false-positive rate & Read, stored and displayed but never applied
+(\id{test\_fp}, \id{test\_fp\_selected}): the simulated rate is $0.1\times$TP. \\
+Risk factors & relative risks for exposures & Declared and never read by the simulation
+(\id{factors\_rr}, \id{age\_irrelevant\_factors\_rr}, \id{factor\_age\_correction}). \\
+Factor accessors & helpers for those tables & Never called (\id{has\_factor}, \id{get\_factor\_rr}). \\
+Legacy configuration & the old key--value format & Reachable only by pointing the model at a \id{.txt}
+file (\id{from\_legacy\_txt}, \id{\_csharp\_to\_python\_name}); no packaged configuration uses it. \\
+Duplicate cure helper & the age-cure step function & Never called (\id{get\_age\_cure\_efficiency}); the
+simulation uses its own copy of the same logic. \\
+Risk-to-distribution helper & annual risks $\rightarrow$ death-age distribution & Never called
+(\id{risks\_to\_distribution}); the model uses observed deaths directly. \\
+Curve-evaluation helpers & evaluating the fitted Gompertz curve & Never called (\id{compute\_output},
+\id{compute\_output\_train}, \id{compute\_train\_ages}, \id{gompertz\_v}, \id{compute\_stage\_age}); the fit
+and the simulation both use the closed-form crossing times. \\
+Vectorised hazard draw & a vectorised first-success draw & Never called (\id{PiecewiseHazard.T\_batch}); the
+population generator does this inline. \\
+Scalar sampling helpers & single-value sampling & Never called (\id{Distribution.generate\_single},
+\id{RandomState.next\_double}, \id{next\_doubles}). \\
+\bottomrule
+\end{tabular}
+\end{center}}
+
+\why{Two principles justify listing this rather than deleting it silently.
+First, \emph{an unimplemented mechanism should be visible as an unimplemented mechanism}. Several of these
+entries (treatment mortality, complications, recurrence) correspond to real clinical effects that the model
+does \emph{not} represent; leaving them in the configuration while they do nothing invites a reader to
+assume they are active, and the resulting model is more dangerous than a smaller one that admits its scope.
+Second, \emph{the size of the inert surface is a measure of the gap between intent and implementation} ---
+here it is a fairly concentrated set of treatment-pathway and recurrence features, which is a useful signal
+about where the model's ambitions outran its inputs.}
+
+\why{\emph{The weakness this exposes.} Inert parameters are a usability trap. A user who sets a false-positive
+rate, a complication rate or a screening price and observes no change has no way to tell a bug from a
+non-feature, and the interface's willingness to display the parameter implies it works. The current code
+does carry in-line comments labelling several of them as inactive, which is the right instinct, but a
+comment is not a contract.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Delete them.} Cleanest: a parameter set that contains only live parameters cannot mislead.
+        The cost is losing the documented intent, which is real information for whoever implements the
+        treatment pathway later.
+  \item \textbf{Keep them, but label them in the interface as inert} (grey out, or annotate ``not used in
+        the current model'', with the reason). Preserves the intent and removes the trap --- this is the
+        smallest change that fixes the actual problem.
+  \item \textbf{Fail loudly when an inert parameter is set to a non-default value} (a validation warning at
+        load time). Guarantees that nobody believes a setting they just made is in force.
+  \item \textbf{Implement the treatment pathway}, turning recurrence, complications and treatment mortality
+        into active mechanisms. The correct long-run answer, and the only one that makes the parameters
+        meaningful; it needs treatment and complication data.
+  \item \textbf{Move the legacy loader out of the main path} (or delete it) so that a single configuration
+        format remains. A second parsing path is a second surface for silent divergence --- the two loaders
+        would have to agree on the meaning of every field, and nothing tests that they do.
+\end{itemize}}
+
+\section{Calibration}
+\label{sec:calib}
+
+\subsection{Three separate likelihoods, and everything else by hand}
+
+\mech{When calibration is requested, the model solves three independent fitting problems.
+
+\begin{enumerate}[nosep]
+  \item \textbf{Diagnosis hazard} (6 coefficients): a Poisson likelihood on the observed age-specific case
+        counts, $C(a)\sim\mathrm{Poisson}\bigl(h(a)P(a)\bigr)$, where $h(a)$ is the piecewise log-hazard of
+        \S4. Minimised with L-BFGS-B under $\pm5$ bounds; it converges in a fraction of a second.
+  \item \textbf{Gompertz shape and rate} (3 parameters $K$, $C$, $B_{\text{pop}}$): least squares on the
+        three crossing times \emph{derived from the stage mix} (\S6.3), plus penalties that keep the
+        carrying capacity above the terminal stage, keep the rate positive, and mildly regularise the
+        capacity so the fit cannot run into a degenerate huge-capacity/tiny-rate corner. In the reference
+        fit the residual is of order $10^{-3}$ --- the targets are reproduced essentially exactly.
+  \item \textbf{Terminal-phase hazard} (1 parameter $\lambda$): a Poisson likelihood on the observed
+        age-specific cancer deaths, $D(a)\sim\mathrm{Poisson}\bigl(e^{\lambda}C(a)\bigr)$ with
+        $C(a)=I(a)P(a)$. The reference fit gives $\lambda=-1.05$, i.e.\ a rate of $0.35$ per year.
+\end{enumerate}
+
+Everything else is a configured value rather than an estimate: the lead-time mean, $B_{\text{std}}$, the
+stage treatment efficiencies, the age cure constants, the aggressiveness odds ratio, the screening schedule,
+participation, test accuracy and the prices. The stage-mix inversion that produces the crossing times is
+arithmetic, not optimisation, and it runs before the Gompertz fit.}
+
+\why{\emph{(i) Splitting the problem is what keeps assumptions assumptions and estimates estimates.} A
+single joint fit over all parameters would be non-identifiable along the two flat ridges of \S5.2 and \S8.2:
+the optimiser could trade lead time against growth rate, or cure probability against terminal hazard, and
+improve the aggregate fit while moving the parameters arbitrarily far. Splitting the fit into three
+well-posed pieces means each parameter is pinned by a target that can actually pin it --- and the quantities
+that no target can pin are \emph{not} fitted at all: they are configured and then varied in the sensitivity
+analysis. That distinction, enforced by the structure of the code rather than by discipline, is the
+guardrail that matters most.
+
+\emph{(ii) Each objective is the right likelihood for its data.} Counts of cases and deaths are Poisson
+counts, not binomial proportions, and the discrete hazard of \S4 is the natural link. Using the correct
+likelihood is not pedantry: the previous formulation used a binomial likelihood on proportions and --- far
+worse --- calibrated mortality against the \emph{diagnosis} hazard rather than the cancer-death hazard, which
+made the mortality calibration meaningless while still looking plausible.
+
+\emph{(iii) Small and smooth objectives are fast, reproducible and auditable.} Six parameters and a smooth
+likelihood converge deterministically from a fixed starting point; one parameter is a line search. Nothing is
+fitted by simulation, so calibration takes milliseconds, results are exactly reproducible, and each
+likelihood value can be printed and checked.
+
+\emph{(iv) Structural constraints are expressed as smooth penalties.} Every threshold crossing must be
+reachable ($\exp K > s$) and the rate must be positive; encoding these as large quadratic penalties keeps the
+optimiser out of the degenerate region without a constrained solver or a rejection loop.}
+
+\why{\emph{Three methodological weaknesses to state.}
+\emph{(a)} The mortality likelihood is an \emph{approximation}: it treats every case as subject to a constant
+death hazard, ignoring that only uncured patients die and that death follows diagnosis with a delay. The
+fitted $\lambda$ therefore absorbs whatever the assumed cure probabilities get wrong --- which is exactly the
+confound of \S8.2, seen from the calibration side.
+\emph{(b)} There is no train/validation split: the model is calibrated and judged on the same data. This is
+the weakest methodological point in the whole design, and the remedy is procedural rather than
+computational.
+\emph{(c)} Not everything that \emph{could} be fitted is fitted. The stage-mix calibration is
+dataset-specific by construction (the crossing times are derived from that dataset's stage mix), so the only
+components transferable between datasets are the diagnosis hazard and the mortality hazard. A genuine
+external validation would therefore have to hold out one of those two, or hold out another population and
+accept that the staging calibration is re-derived --- which limits what ``validation'' can mean here, and
+should be said wherever a validation claim is made.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Joint Bayesian calibration with priors and posterior predictive checks} (MCMC or ABC). The
+        statistically correct way to handle the flat ridges: the assumptions enter as priors and their
+        consequences arrive as credible intervals instead of as a set of re-runs. Costs hours instead of
+        milliseconds, and the headline numbers then depend on priors that are themselves not derived from
+        data.
+  \item \textbf{Simulated maximum likelihood} (computing the likelihood from simulation rather than
+        analytically). Removes the mortality approximation and would make the cure-versus-terminal-hazard
+        ridge explicit rather than hidden; the objective becomes noisy and far more expensive, which in turn
+        requires many replications or a stochastic optimiser.
+  \item \textbf{Approximate Bayesian computation or history matching.} Likelihood-free and well suited to a
+        simulator whose analytic likelihood is only approximate; needs thousands of runs and an explicit
+        tolerance, so it is a research workflow rather than an interactive one.
+  \item \textbf{A surrogate model plus global optimisation} (the differential-evolution and Optuna paths
+        already present in the code). Useful when the objective is multi-modal or noisy; it adds a
+        hyper-parameter --- the surrogate's own fit --- to the problem.
+  \item \textbf{Manual / expert (Delphi) calibration}, as practised for several large cancer models.
+        Transparent, and it can incorporate judgement the data do not carry; it is not reproducible and it is
+        hard to audit.
+  \item \textbf{Iterated sequential calibration to convergence} (fit the hazards, hold them, fit the staging,
+        then revisit the hazards). Makes the coupling between components explicit; it needs a convergence
+        criterion, and it can drift if the components are only weakly coupled.
+  \item \textbf{A genuine hold-out protocol:} calibrate on one population or period and validate on another
+        --- the packaged USA and Germany datasets make this a one-line experiment for the transferable
+        components --- split temporally where multiple periods exist, and report the validation error as the
+        headline quality metric. This is the highest-value methodological addition available without new
+        data.
+\end{itemize}}
+
+\section{Randomness and Reproducibility}
+
+\subsection{Two layers of randomness}
+
+\mech{The model uses two layers. \emph{Population-level} draws (initial ages, natural death ages, the
+per-agent stream seeds) come from a single PCG64 generator seeded once per run and stored with the results.
+\emph{Agent-level} draws inside the cancer-history kernel do not use that generator at all: each agent has a
+64-bit stream identifier, and each quantity is drawn as $\id{uniform}(\text{seed}_i + k)$ for successive
+small offsets $k$, using a SplitMix64-style avalanche hash. Gaussian draws are Box--Muller on two uniforms
+from the same stream; Bernoulli draws are uniform comparisons. The generator state is \emph{thread-local},
+so concurrent runs in one process cannot re-seed each other, and the seed is logged with every run.}
+
+\why{\emph{(i) Per-agent streams decouple agents from each other and from the order of work.} An agent's
+draws depend only on its own identifier, so the results are invariant to how the loop is laid out, to
+vectorisation, and to any future parallelism. That is what allows the kernel to iterate agents in whatever
+order is convenient and to be compiled as a tight loop.
+
+\emph{(ii) Neighbouring indices must decorrelate, because the kernel reads them consecutively.} Each agent
+draws many quantities from nearby offsets, so the map from index to value has to look like independent noise
+for offsets of 1, 2, 3\ldots. It did not. The previous linear congruential generator followed by a single
+xorshift step gave $\mathrm{corr}\bigl(u(s),u(s{+}1)\bigr)\approx+0.36$ and
+$P\bigl(u(s{+}1)<u(s)\bigr)\approx0.12$ --- instead of $0$ and $0.5$ --- which silently coupled the stage
+draw to the lead time, the cure draw, the cancer-death age and the aggressiveness label. Aggressive tumours,
+for example, were drawn almost only at stage IV. This was a real modelling error, not an aesthetic one: it
+changed the joint distribution of the model's own variables. The avalanche hash fixes it, and a guard test
+now pins the invariant ($|\mathrm{corr}|<0.015$ and $|P-\tfrac12|<0.015$ at ten lags).
+
+\emph{(iii) Thread-local state is a correctness requirement for a web service.} The application serves
+concurrent runs from separate threads; a process-wide singleton let one run re-seed the stream another run
+was drawing from, which broke reproducibility only intermittently and therefore looked like flakiness rather
+than a bug.
+
+\emph{(iv) PCG64 for the population-level draws} is a modern, small-state, well-tested generator and it is
+the current NumPy default --- the safe choice for quantities that are drawn once per agent in bulk.
+
+\emph{(v) Logging the seed makes every result reproducible in one command}, which is a prerequisite for the
+calibration, debugging and validation workflows, and for reproducing a figure quoted in a report.}
+
+\why{\emph{Two honest qualifications.} First, the agent-level streams are \emph{pseudo}-independent by
+construction: they are not formally independent, and their adequacy rests on the avalanche property being
+verified (which the guard test does) rather than on a theorem. Second, exactly reproducing a run requires
+both layers to be seeded consistently, so the seed reported with a result must be understood to control the
+agent-level seeds too --- it does, because they are themselves drawn from the seeded population-level
+generator, but the dependency is worth stating.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A single sequential RNG stream for everything.} Simplest possible design; it makes every
+        result depend on the exact order of operations, which forecloses vectorisation and parallelism and
+        means any code rearrangement changes all outputs. It is also what makes accidental correlations
+        across variables easy to create and hard to notice.
+  \item \textbf{A full generator object per agent} (each with its own PCG64 state). Statistically excellent
+        and trivially independent; constructing one object per agent costs orders of magnitude more than
+        hashing two 64-bit words, and the kernel is executed for every agent in the population.
+  \item \textbf{Counter-based generators (Philox, Threefry).} Built precisely for this pattern --- a counter
+        plus a key streams out values --- with documented statistical quality and cheap parallel jumps; the
+        natural upgrade path, and it would remove the reliance on a hash's avalanche behaviour.
+  \item \textbf{Common random numbers across scenarios} (sharing the random shocks between the screened and
+        unscreened arms to shrink the variance of the difference still further). The paired design of \S10
+        already captures most of this benefit by storing the counterfactual rather than re-simulating it.
+  \item \textbf{Replicate runs with reported intervals} rather than a single run (seed averaging). The honest
+        way to present a stochastic model's output, especially for tail quantities such as lives saved, where
+        a single run's count can move by several units; it multiplies the runtime by the number of
+        replicates, which the interactive interface cannot currently afford.
+  \item \textbf{Antithetic or quasi-random (Sobol) sampling} for the population-level draws. Reduces
+        variance for integration-like quantities; much less useful for rare tail events, which is what the
+        interesting outputs are.
+  \item \textbf{A recorded draw-by-draw random-number log} for bit-level reproducibility under any future
+        code change. Overkill today, but it is the standard a formally certified model is eventually held
+        to.
+\end{itemize}}
+
+\section{Sensitivity Analysis as the Uncertainty Statement}
+\label{sec:sens}
+
+\mech{The sensitivity analysis re-runs the whole model for multiples of the lead-time mean --- $0.5$,
+$0.75$, $1.0$, $1.25$ and $1.5$ by default --- and reports the incidence, mortality, screening-mortality,
+survival and years-saved curves plus the stage distributions for every factor side by side. For a factor
+$f$ the lead-time mean becomes $f\mu$ \emph{and} the stage-crossing times are rescaled by the same factor,
+after which the Gompertz is refitted to the rescaled targets, so the model still reproduces the same stage
+mix at the new time scale. All other parameters stay at their fitted reference values, and the random seed
+is the same for every factor. Display smoothing is applied to the curves, never to the stored numbers.}
+
+\why{\emph{(i) The honest response to an unidentifiable parameter is a range, not a value.} The lead time
+cannot be estimated from the available data (\S5.2), so the only defensible thing to do with it is to show
+what the answer looks like across its plausible range. The sensitivity analysis \emph{is} the model's
+uncertainty statement about its one structural assumption --- not an optional extra.
+
+\emph{(ii) Rescaling the crossing times together with the lead time is what keeps the comparison
+meaningful.} Because $t_s=-\mu\ln P(\text{stage}\ge s)$, changing $\mu$ while holding the crossing times
+fixed would change the stage mix and thereby confound the time-scale question with a staging change. Moving
+both together holds the observable stage mix constant, so the curves differ \emph{because} of the time-scale
+assumption and nothing else.
+
+\emph{(iii) A common seed across factors is a variance-reduction device, and here it is essential.} Sharing
+the random shocks means the between-factor differences are the model's genuine response to the assumption,
+with the Monte-Carlo noise largely cancelled out of the comparison. Without it, and with as few screening
+events as the reference run produces, the spread between curves could be dominated by sampling variation
+--- a user would be reading noise as sensitivity.
+
+\emph{(iv) Smoothing is presentation-only} so that the numbers reported and exported remain exact, and the
+parallel execution path exists so that five full re-runs stay interactive, with an automatic threshold that
+avoids paying process start-up for jobs too small to benefit.}
+
+\why{\emph{Two limitations that a reader of these plots should know.} First, \emph{only the lead time
+varies}. The other hand-set quantities --- $B_{\text{std}}$, the cure probabilities, the aggressiveness odds
+ratio, participation, test accuracy --- are equally unverified, and a set of curves that varies only one axis
+can easily be read as ``this is the only soft assumption''. Second, the analysis reports \emph{curves} rather
+than a decision metric, so the quantity a decision-maker would actually want ranged (lives saved, or cost
+per life saved, under each factor) is not tabulated and has to be assembled from the metrics block by hand.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{A standardised sweep over every soft parameter}, with the results tabulated as decision
+        metrics rather than as families of curves. One-at-a-time analysis is a lower bound on uncertainty
+        (it cannot show interactions); it is easy to run because the model is fast, and it is the most
+        valuable single addition available.
+  \item \textbf{Global sensitivity analysis} (variance decomposition, Sobol indices, elementary-effects
+        screening). Apportions the output variance across the assumptions and exposes interactions; needs a
+        designed experiment over hundreds or thousands of runs, which is within reach of the current model
+        but not of the current interface.
+  \item \textbf{Probabilistic sensitivity analysis} (distributions on the soft parameters, Monte Carlo over
+        draws, and intervals on the outcomes). The health-economic standard, and it converts
+        ``here are five curves'' into ``here is the distribution of the answer''; it requires defensible
+        distributions, which for the hand-set parameters means priors.
+  \item \textbf{Scenario analysis} (``optimistic test'', ``pessimistic participation'', ``slow tumours'')
+        instead of a numeric sweep. More communicable to non-modellers and it forces the assumptions to be
+        named; it is a presentation of the same information and loses the systematic coverage.
+  \item \textbf{Value-of-information analysis} (which assumption, if researched, would most reduce decision
+        uncertainty). The natural next question after a sensitivity analysis, and the one that turns the
+        exercise into a research agenda; it needs a decision rule and a loss function.
+  \item \textbf{Structural sensitivity:} swapping the mechanism itself (a size-threshold detection model
+        instead of a lead-time model, per-stage dwell times instead of crossing times, an onset-driven
+        natural history instead of a diagnosis-driven one) and comparing the outputs. No parameter sweep can
+        reach this class of uncertainty, and it is where the largest unquantified risk lies.
+\end{itemize}}
+
+\section{Assumptions, Direction of Bias, and Falsifiability}
+\label{sec:assumptions}
+
+\subsection{The assumption register}
+
+\mech{Every simplification in the model is listed below with the direction in which it pushes the results.
+Where the direction is stated, it is the direction relative to a ``true'' model of the same question; where
+it is not determinable from the design alone, that is said instead of guessed.
+
+\begin{center}
+\footnotesize
+\begin{tabular}{@{}p{8.0cm}p{7.6cm}@{}}
+\toprule
+\textbf{Assumption} & \textbf{Direction of the bias if it is wrong} \\
+\midrule
+No pre-cancer stage (no adenoma--carcinoma sequence; every cancer arises invasive). & Overstates the
+screening benefit: removing a pre-cancerous lesion is an additional protective mechanism the model lacks. \\
+No non-progressive lesions. & Overstates the benefit: every screen-detected cancer is assumed to be one
+that would have surfaced and could have killed, so overdiagnosis cannot be represented. \\
+Diagnosis-driven natural history (no undiagnosed cancer deaths). & Understates the population's cancer
+burden; harmless for the screening contrast, misleading for a burden estimate. \\
+The absolute preclinical time scale (lead-time mean) is assumed, not estimated. & Not determinable --- this
+is precisely why it is swept (\S16). It is the model's largest single assumption. \\
+Growth heterogeneity ($B_{\text{std}}$) is set by hand. & Not determinable; too little makes the stage shift
+too clean and too favourable, too much does the reverse. Currently not swept. \\
+Cure probabilities are set by hand and are confounded with the fitted terminal hazard. & The aggregate
+cancer mortality is matched either way; what is not identified is the composition --- how many patients the
+``cure'' actually rescues. \\
+Aggressiveness does not affect growth. & Understates the biology; the observed stage gradient in survival
+is then partly a model construction rather than a mechanism. \\
+One primary cancer per person; no second primaries or metachronous tumours. & Slightly understates incidence
+and mortality. \\
+No treatment-related mortality, no complications. & Understates the harm side of both treatment and
+screening (the follow-up after a positive test). \\
+No behavioural effects (a false positive does not change attendance; screening does not change lifestyle).
+& Not determinable; real programmes show both effects, in opposite directions. \\
+Uniform treatment at a given stage, regardless of comorbidity, access or era. & Understates variation and
+inequality; the average may be biased in either direction depending on the population. \\
+Closed population: no births, no migration. & Only matters over horizons long enough for the age structure
+to drift, which 30 years largely is not. \\
+Annual discrete time; within-year ordering ignored. & Small, but systematic for the fastest terminal
+phases (mean terminal survival is only about three years). \\
+Cancer death does not remove the agent from the simulated population; cause-specific rates use the
+general-population denominator. & Treats the two causes as independent; small at these rates, but it
+understates the correction that a competing-risk denominator would apply. \\
+Age is the only exposure dimension: no sex, no region, no time trend, no risk factors. & The model
+represents one population in one period; applying it to trends, to another sex, or to a risk-stratified
+programme would be invalid rather than merely imprecise. \\
+Benefit is measured within the simulation horizon. & Understates lifetime benefit, and makes the headline
+figure depend on the horizon. \\
+Test performance is a constant (true-, false-positive) pair. & Omits size dependence and all false-positive
+harm, so the net benefit is slightly overstated. \\
+Screen-detected and clinically detected cancers of the same stage are treated identically. & Ambiguous:
+screen-detected tumours often have better biology (understating the benefit), while the override of the
+clinical cure path can work the other way (\S9.3). \\
+No discounting and no time preference. & Overstates long-run benefits relative to costs when compared with
+a discounted analysis. \\
+Risk factors, complications, recurrence and treatment mortality exist as parameters but do nothing
+(\S13). & No effect; the risk is purely that a reader assumes they are active. \\
+\bottomrule
+\end{tabular}
+\end{center}}
+
+\subsection{What would show the model to be wrong}
+
+\mech{Three classes of check are available, and they differ enormously in strength.
+
+\emph{(i) Internal consistency checks} --- quantities the model is supposed to reproduce from data it was
+given: the age-specific incidence curve (fitted), the age-specific cancer mortality curve (fitted, but with
+the cure-versus-terminal-hazard confound of \S8.2), and the stage mix at diagnosis. The third is the
+informative one, because only its three crossing-time \emph{targets} are taken from the data: the stage mix
+itself is then produced by the interaction of the growth model and the lead time. In the reference run it is
+reproduced to within a few thousandths ($0.225/0.250/0.284/0.241$ against $0.220/0.256/0.308/0.218$). A
+failure here would point squarely at the growth model, the crossing-time inversion, or the per-agent draws.
+
+\emph{(ii) External checks} --- the ones that can actually falsify the model: a screening trial of the same
+test in the same age range, where the model's benefit must agree in both sign and magnitude; the observed
+mix and rate of interval cancers in a real programme; the within-person stage shift measured in a screened
+cohort (\S11.3); and the sojourn time inferred from screen-detected versus interval cancers, which would
+identify the one quantity the model has to assume. None of these are possible with the packaged aggregate
+data, and all of them are possible with trial or registry screening data.
+
+\emph{(iii) Structural checks} --- consistency of the mechanism with what is known about the disease. The
+model has no pre-cancer stage and no non-progressive lesions, so if it predicts a benefit where a trial
+found none, those two omissions are the first suspects, in that order. A structural check can also be run as
+an experiment rather than as an argument: implement the omitted mechanism and see whether the conclusion
+survives.}
+
+\why{Falsifiability cannot be bolted on at the end: it has to be specified before the numbers are seen, or
+it degenerates into post-hoc rationalisation. The model is unusually well placed for this because it is fast
+and deterministic given a seed --- a criterion can be checked in seconds --- yet it currently has no
+pre-registered success criteria and no formal validation against anything outside its own calibration data.
+That is the gap between a working model and a defensible one.}
+
+\alt{\begin{itemize}[nosep]
+  \item \textbf{Pre-registered success criteria and analysis plan} (which outputs, which tolerance, which
+        dataset, decided in advance). Cheap, purely procedural, and it converts validation from a narrative
+        into a test.
+  \item \textbf{A permanent benchmark suite} (recorded reference outputs under fixed seeds, checked on every
+        change). The model already does this for the random generator; extending the same idea to the whole
+        simulation would catch unintended changes --- the ones that produce plausible-looking but different
+        numbers, which are the dangerous ones.
+  \item \textbf{Periodic recalibration against newly published data}, with the previous version's
+        predictions compared against the new observations and the discrepancy reported. Turns an annual data
+        release into a published back-test.
+  \item \textbf{An independent implementation of one component} (for example an independent recomputation of
+        the crossing-time inversion and the Gompertz fit) to catch a shared misconception between the
+        specification and the code.
+  \item \textbf{Decision-analytic validation} (does the model change a decision that would otherwise have
+        been made?). The most relevant test for a screening model, and the only one that directly addresses
+        whether the modelling error matters.
+\end{itemize}}
+
+\section{Summary: Every Element, Its Choice, Its Alternatives}
+
+The table below is the whole document in one place. For each modelling element it states the design that was
+chosen, the alternatives that were considered, and what would change upstream if the design were switched.
+
+{\footnotesize\setlength{\tabcolsep}{4pt}
+\begin{longtable}{@{}p{2.3cm}p{4.5cm}p{4.0cm}p{4.0cm}@{}}
+\toprule
+\textbf{Element} & \textbf{Chosen design} & \textbf{Main alternatives} & \textbf{What changes upstream if switched} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Element} & \textbf{Chosen design} & \textbf{Main alternatives} & \textbf{What changes upstream if switched} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+Model class & Agent-based microsimulation; both arms from the same agents & Cohort Markov, age-structured PDE,
+renewal equation, semi-Markov, compartmental ODE & The paired lives-saved accounting (the model's statistical
+efficiency) is lost; heterogeneity must be discretised into states. \\
+Time & Annual discrete steps on an integer age grid & Continuous time with exponential clocks, monthly
+steps, event-driven simulation & Screening instants and terminal-phase timing become exact; the calibration
+targets stay annual, so the extra resolution is not controlled by data. \\
+Population frame & Closed cross-sectional cohort, 30-year horizon & Birth cohort from age 0, open population
+with demographic projection, steady state & A birth cohort needs a century-long burn-in; an open population
+contaminates the screening contrast with demographic drift. \\
+Initial ages & Observed age structure used as a probability mass & Uniform or parametric age profile, age
+bands, census microdata & Parametric profiles impose a shape; a uniform start destroys the dominant driver of
+incidence. \\
+Non-cancer mortality & One sampled natural death age per agent, from observed deaths & Annual Bernoulli
+survival draws, parametric mortality law, cause-deleted life tables, frailty & Cause-deleted tables would
+separate the two causes properly (needs a cause-specific death column); frailty needs an unidentifiable
+distribution. \\
+Onset hazard & Piecewise-constant log-hazard on age; the first Bernoulli success defines the diagnosis age &
+Smooth parametric hazard, splines, observed rates used directly, mechanistic carcinogenesis model & Splines
+are the natural refinement; a mechanistic model would make risk factors modelable but is not identifiable
+from incidence alone. \\
+What counts as cancer & Diagnosed before natural death; agents past 98 excluded & Onset-driven natural
+history, a non-progressive lesion fraction, no exclusion at all & Onset-driven natural history would make
+overdiagnosis representable, and is the largest structural upgrade available. \\
+Lead time & Exponential with an assumed mean (3.5 years) & Gamma/Weibull sojourn, deterministic lead time,
+per-stage dwell times, size-threshold detectability, estimation from trial data & Only trial or registry
+screening data identifies the scale; size-threshold detectability would unify detection with the growth
+curve. \\
+Time-scale identification & Fix the scale; derive crossing times from the stage mix; sweep the scale &
+Bayesian prior and posterior, profile likelihood, fix the growth rate instead, two-parameter sojourn & A
+posterior converts one number plus a caveat into intervals on every output, at the cost of hours and of a
+prior. \\
+Growth curve & Reduced Gompertz, $V(t)=\exp(K-\exp(C-Bt))$ & Exponential, logistic, von Bertalanffy,
+Weibull/power law, mechanistic ODE, branching process, no growth model & A different curve changes the
+closed-form crossing times, and with them the entire staging calibration and the identifiability argument. \\
+Growth heterogeneity & Log-normal $B_{\text{ind}}$ with hand-set $B_{\text{std}}=0.1$ & No heterogeneity,
+Gamma growth rate, discrete growth classes, random effects on covariates & $B_{\text{std}}=0$ removes length
+bias and makes the stage a deterministic function of the lead time. \\
+Staging & Derived: the number of size thresholds crossed before diagnosis & Draw from the observed mix,
+ordinal regression on covariates, latent multi-state progression, TNM & Drawing the mix makes calibration a
+tautology; TNM would need size and nodal data. \\
+Aggressiveness & Per-stage Bernoulli label modifying cure odds (OR 0.667) & Growth modifier, continuous
+latent score, mixture cure model, subtype-specific survival, no label & Making it a growth modifier
+double-counts against $B_{\text{std}}$ and breaks the exact stage-mix fit. \\
+Cure & Stage efficiency $\times$ age step function, capped, Bernoulli; cure means the cancer no longer
+decides death & Relative-survival tables used directly, mixture cure model estimated from follow-up,
+excess-hazard modelling, treatment pathways & Registry survival tables would remove the mechanism and the
+ability to ask why a patient survives. \\
+Screening schedule & Age window plus fixed period; independent per-round participation & Continuous-time
+screening, correlated/sticky participation, never-attenders, programme scale-up & Sticky participation would
+make the benefit depend on reaching under-screened groups; the present design cannot express it. \\
+Test performance & A (TP, FP) menu of which only TP is applied (FP $=0.1\times$TP) & Sensitivity/specificity
+framing, size-dependent sensitivity, explicit follow-up costs & Making FP live is a bug fix;
+size-dependent sensitivity is what makes the length bias quantitative. \\
+Screen detection & Re-uses the clinical cure model with the stage at detection; overrides the clinical path &
+Additive effect, route-specific cure parameter, route-specific survival from a trial & The override creates a
+harm channel; an additive design would remove it but understate the benefit. \\
+False positives & Counted only, with no consequences & Follow-up procedures, costs, anxiety, effects on
+attendance & Modelling them is the correct direction, and it needs health-economic and behavioural data. \\
+Death attribution & Derived from the stored ages; five exhaustive categories & Two-population comparison,
+same-seed twin run, relative survival, probability of causation & A two-population comparison loses the
+pairing and needs far more agents for the same precision. \\
+Rates and outcomes & Counts by year and age; crude rates over person-years & Age standardisation, cumulative
+risk, interval bands, smoothing & Standardisation is necessary for cross-dataset comparison, and it is
+currently left to the reader. \\
+Survival & Cause-specific from diagnosis, stratified by stage and aggressiveness, cured patients censored &
+All-cause survival, relative/net survival, excess hazard, parametric models, conditional survival & Relative
+survival is the registry standard and the only like-for-like comparison with published figures. \\
+Stage shift & Both distributions reported; the within-person shift is the mechanism & Aggregate shift only, a
+paired shift as a first-class output, TNM shift, standardised stage-shift analysis & Reporting the paired
+shift would prevent the length-bias misreading that the marginals invite. \\
+Costs & Tests $\times$ unit price plus cured patients $\times$ stage price; dimensionless & Full
+cost-effectiveness analysis, treatment-pathway costing, real tariffs, societal perspective, micro-costing &
+Charging everyone treated and adding follow-up costs would change the economics qualitatively, not merely in
+level. \\
+Inactive elements & Documented rather than removed (\S13) & Delete them, label them as inert in the interface,
+warn on non-default values, implement the treatment pathway & Implementing recurrence, complications and
+treatment mortality makes those parameters meaningful, and adds a real harm channel. \\
+Randomness & PCG64 at population level, SplitMix64 hash per agent, thread-local state & A single sequential
+stream, a generator per agent, counter-based generators, common random numbers, replicates with intervals &
+Replicates with reported intervals are the honest presentation for tail quantities such as lives saved. \\
+Calibration & Three separate likelihoods; everything unidentifiable is configured by hand & Joint Bayesian
+calibration, simulated likelihood, ABC/history matching, surrogate plus global optimisation, Delphi &
+A joint Bayesian fit would quantify the ridges, but would make the headline numbers prior-dependent. \\
+Validation & None formal; the stage mix is the only informative internal check & Pre-registered criteria,
+hold-out population, benchmark suite, periodic back-testing, decision-analytic validation & Pre-registration
+is procedural and free, and it is the largest gap between this model and a defensible one. \\
+Sensitivity & One axis (the lead-time scale), common seed, curves reported & A sweep over all soft
+parameters, global variance decomposition, probabilistic analysis, scenarios, value of information,
+structural swaps & Sweeping all soft parameters would show that the lead time is not the only unverified
+assumption. \\
+\end{longtable}
+}
+
+\section{Where to Read More}
+
+This document is the ``why'' of the model. Its two siblings cover the other angles:
+
+\begin{itemize}[nosep]
+  \item \id{model\_for\_dummies.pdf} --- the same model in plain language, for a reader who wants to know
+        what the software does rather than why it was built this way.
+  \item \id{python\_port\_analysis.pdf} --- the technical and statistical review: state variables, the
+        statistical corrections applied during the port, performance, and the methodological improvements
+        that would be needed for a formal policy-grade model.
+\end{itemize}
+
+The parameter file (\id{config/parameters.toml}) carries a comment against every hand-set parameter saying
+what it is and whether it is estimated; the sections above are the long form of those comments. The two
+structural assumptions to keep in view while reading any result are the assumed preclinical time scale and
+the assumed cure probabilities, because those are the two quantities that the data cannot pin down --- and
+they are also the two that the sensitivity analysis, in its present one-axis form, does not fully cover.
+
+\end{document}
